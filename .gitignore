@@ -1,0 +1,9 @@
+# VSCode
+.vscode/
+
+# IDEA
+.idea/
+*.iml
+
+# 编译文件
+*.exe
