@@ -1,19 +1,29 @@
 package gopher_fetch
 
-import "encoding/json"
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	tp "gitee.com/swsk33/concurrent-task-pool"
+	"io"
+	"net/http"
+	"os"
+	"time"
+)
 
 // ParallelGetTaskConfig 多线程下载任务的配置性质属性
 type ParallelGetTaskConfig struct {
 	// 文件的下载链接
 	Url string `json:"url"`
-	// 文件的最终保存位置
+	// 下载文件位置
 	FilePath string `json:"filePath"`
 	// 下载并发数
 	Concurrent int `json:"concurrent"`
-	// 下载的分片临时文件保存文件夹（不存在会自动创建）
-	TempFolder string `json:"tempFolder"`
 	// 下载进度记录文件位置
-	ProcessFile string `json:"processFile"`
+	processFile string
+	// 是否从进度文件恢复的任务
+	isRecover bool
 }
 
 // ParallelGetTaskStatus 多线程下载任务的状态性质属性
@@ -21,9 +31,9 @@ type ParallelGetTaskStatus struct {
 	// 下载文件的总大小
 	TotalSize int64 `json:"totalSize"`
 	// 已下载部分的大小
-	DownloadSize int64 `json:"downloadSize"`
-	// 当前任务是否暂停
-	IsPause bool `json:"isPause"`
+	downloadSize int64
+	// 当前并发任务数
+	concurrentTaskCount int
 	// 存放全部分片任务的列表
 	ShardList []*ShardTask `json:"shardList"`
 }
@@ -36,33 +46,272 @@ type ParallelGetTask struct {
 	Status ParallelGetTaskStatus `json:"status"`
 }
 
-// NewParallelGetTask 的构造函数
+// 获取文件大小并分配任务
+func (task *ParallelGetTask) allocateTask() error {
+	// 获取Length
+	response, e := httpClient.Head(task.Config.Url)
+	if e != nil {
+		logger.ErrorLine("发送HEAD请求出错！")
+		return e
+	}
+	// 读取并设定长度
+	task.Status.TotalSize = response.ContentLength
+	if task.Status.TotalSize == -1 {
+		return errors.New("无法获取目标文件大小！")
+	}
+	// 检查并发数与大小
+	if int64(task.Config.Concurrent) > task.Status.TotalSize {
+		logger.Warn("并发数：%d大于总大小：%d，将调整并发数为：%d\n", task.Config.Concurrent, task.Status.TotalSize, task.Status.TotalSize)
+		task.Config.Concurrent = int(task.Status.TotalSize)
+	}
+	// 计算分片下载范围
+	eachSize := task.Status.TotalSize / int64(task.Config.Concurrent)
+	// 创建分片任务对象
+	for i := 0; i < task.Config.Concurrent; i++ {
+		task.Status.ShardList = append(task.Status.ShardList, NewShardTask(task.Config.Url, i+1, task.Config.FilePath, int64(i)*eachSize, int64(i+1)*eachSize-1))
+	}
+	// 处理末尾部分
+	if task.Status.TotalSize%int64(task.Config.Concurrent) != 0 {
+		task.Status.ShardList[task.Config.Concurrent-1].Config.RangeEnd = task.Status.TotalSize - 1
+	}
+	logger.Info("已完成分片计算！文件大小：%d字节，分片数：%d\n", task.Status.TotalSize, task.Config.Concurrent)
+	return nil
+}
+
+// 创建一个与目标下载文件大小一样的空白的文件
+func (task *ParallelGetTask) createFile() error {
+	// 创建文件
+	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY|os.O_CREATE, 0755)
+	defer func() {
+		_ = file.Close()
+	}()
+	if e != nil {
+		logger.ErrorLine("创建文件出错！")
+		return e
+	}
+	// 调整文件大小
+	e = file.Truncate(task.Status.TotalSize)
+	if e != nil {
+		logger.ErrorLine("调整文件大小出错！")
+		return e
+	}
+	logger.InfoLine("已为下载文件预分配磁盘空间！")
+	return nil
+}
+
+// 开始下载全部分片
+func (task *ParallelGetTask) downloadShard() error {
+	var totalError error
+	// 创建并发任务池，下载分片数据
+	taskPool := tp.NewTaskPool[*ShardTask](task.Config.Concurrent, task.Status.ShardList,
+		// 每个分片任务下载逻辑
+		func(shardTask *ShardTask, pool *tp.TaskPool[*ShardTask]) {
+			// 如果任务已下载完成，则直接退出
+			if shardTask.Status.TaskDone {
+				logger.Warn("分片任务%d已下载完成，无需继续下载！\n", shardTask.Config.Order)
+				return
+			}
+			// 打开文件
+			file, e := os.OpenFile(shardTask.Config.FilePath, os.O_WRONLY, 0755)
+			defer func() {
+				_ = file.Close()
+			}()
+			if e != nil {
+				logger.Error("任务%d打开文件失败！\n", shardTask.Config.Order)
+				totalError = e
+				pool.Interrupt()
+				return
+			}
+			// 设定文件指针
+			_, e = file.Seek(shardTask.Config.RangeStart+shardTask.Status.DownloadSize, io.SeekStart)
+			if e != nil {
+				logger.Error("任务%d设定文件指针失败！\n", shardTask.Config.Order)
+				totalError = e
+				pool.Interrupt()
+				return
+			}
+			// 准备请求
+			request, e := http.NewRequest("GET", shardTask.Config.Url, nil)
+			if e != nil {
+				logger.Error("任务%d创建请求出错！\n", shardTask.Config.Order)
+				totalError = e
+				pool.Interrupt()
+				return
+			}
+			// 设定请求头
+			request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", shardTask.Config.RangeStart+shardTask.Status.DownloadSize, shardTask.Config.RangeEnd))
+			request.Header.Set("User-Agent", GlobalConfig.UserAgent)
+			// 发送请求
+			response, e := httpClient.Do(request)
+			// 出现错误则视情况重试
+			if e != nil {
+				if shardTask.Status.retryCount < GlobalConfig.Retry {
+					// 放入队列重试
+					shardTask.Status.retryCount++
+					pool.TaskQueue.Offer(shardTask)
+					realTimeLogger.InfoLine("")
+					logger.Warn("任务%d发送请求失败！将进行第%d次重试！\n", shardTask.Config.Order, shardTask.Status.retryCount)
+					return
+				}
+				// 否则，中断并返回错误
+				logger.Error("任务%d发送请求失败！终止下载！\n", shardTask.Config.Order)
+				totalError = e
+				pool.Interrupt()
+				return
+			}
+			// 读取请求体
+			body := response.Body
+			defer func() {
+				_ = body.Close()
+			}()
+			// 读取缓冲区
+			buffer := make([]byte, 8092)
+			// 准备写入文件
+			writer := bufio.NewWriter(file)
+			for {
+				// 读取一次内容至缓冲区
+				readSize, readError := body.Read(buffer)
+				if readError != nil {
+					// 如果读取完毕则退出循环
+					if readError == io.EOF {
+						break
+					} else {
+						// 视情况重试
+						if shardTask.Status.retryCount < GlobalConfig.Retry {
+							// 放入队列重试
+							shardTask.Status.retryCount++
+							pool.TaskQueue.Offer(shardTask)
+							realTimeLogger.InfoLine("")
+							logger.Warn("任务%d读取响应失败！将进行第%d次重试！\n", shardTask.Config.Order, shardTask.Status.retryCount)
+							return
+						}
+						// 否则，中断并返回错误
+						logger.Error("任务%d读取响应失败！终止下载！\n", shardTask.Config.Order)
+						totalError = readError
+						pool.Interrupt()
+						return
+					}
+				}
+				// 把缓冲区内容追加至文件
+				_, writeError := writer.Write(buffer[:readSize])
+				if writeError != nil {
+					logger.Error("任务%d写入文件时出现错误！\n", shardTask.Config.Order)
+					totalError = writeError
+					pool.Interrupt()
+					return
+				}
+				_ = writer.Flush()
+				// 记录下载进度
+				shardTask.Status.DownloadSize += int64(readSize)
+			}
+			// 标记任务完成
+			shardTask.Status.TaskDone = true
+		},
+		// 停机信号逻辑
+		func(tasks []*ShardTask) {
+			realTimeLogger.InfoLine("")
+			logger.WarnLine("接收到终止信号！将保存进度...")
+			e := task.saveProcess()
+			if e != nil {
+				logger.ErrorLine("保存进度失败！")
+				logger.ErrorLine(e.Error())
+			}
+			totalError = errors.New("下载任务被中断！")
+		})
+	// 启动分片下载任务
+	logger.InfoLine("开始执行分片下载...")
+	isDone := false
+	go func() {
+		taskPool.Start()
+		isDone = true
+	}()
+	// 上一次下载大小
+	var lastDownloadSize int64 = 0
+	// 阻塞至下载任务完成或者中断
+	for !isDone {
+		// 保存进度
+		_ = task.saveProcess()
+		// 统计当前并发数
+		currentTaskCount := 0
+		for _, shardTask := range task.Status.ShardList {
+			if !shardTask.Status.TaskDone {
+				currentTaskCount += 1
+			}
+		}
+		task.Status.concurrentTaskCount = currentTaskCount
+		// 统计已下载大小
+		var size int64 = 0
+		for _, eachTask := range task.Status.ShardList {
+			size += eachTask.Status.DownloadSize
+		}
+		task.Status.downloadSize = size
+		// 计算速度
+		currentDownload := size - lastDownloadSize
+		lastDownloadSize = size
+		speedString := computeSpeed(currentDownload, 200)
+		// 输出进度
+		realTimeLogger.Info("\r当前并发数：%d 速度：%s 总进度：%3.2f%%", task.Status.concurrentTaskCount, speedString, float32(task.Status.downloadSize)/float32(task.Status.TotalSize)*100)
+		time.Sleep(200 * time.Millisecond)
+	}
+	// 换行
+	realTimeLogger.InfoLine("")
+	return totalError
+}
+
+// 保存当前状态至进度文件
+func (task *ParallelGetTask) saveProcess() error {
+	if task.Config.processFile == "" {
+		return nil
+	}
+	// 序列化
+	content, e := json.Marshal(task)
+	if e != nil {
+		logger.ErrorLine("序列化任务对象出现错误！")
+		return e
+	}
+	// 保存
+	return writeFile(content, task.Config.processFile)
+}
+
+// NewParallelGetTask 构造函数，用于创建一个全新的分片下载任务，创建任务时会发送HEAD请求获取目标文件大小
 //
 // url 下载地址
 //
 // filePath 下载文件的保存路径
 //
-// tempFolder 下载文件时分片的临时文件存放目录（不存在会自动创建）
-//
 // processFile 下载进度文件的保存位置，若传入空字符串""表示不记录为进度文件
 //
 // concurrent 多线程下载并发数
-func NewParallelGetTask(url, filePath, tempFolder, processFile string, concurrent int) *ParallelGetTask {
-	return &ParallelGetTask{
+func NewParallelGetTask(url, filePath, processFile string, concurrent int) (*ParallelGetTask, error) {
+	// 创建任务对象
+	task := &ParallelGetTask{
 		Config: ParallelGetTaskConfig{
 			Url:         url,
 			FilePath:    filePath,
 			Concurrent:  concurrent,
-			TempFolder:  tempFolder,
-			ProcessFile: processFile,
+			processFile: processFile,
+			isRecover:   false,
 		},
 		Status: ParallelGetTaskStatus{
 			TotalSize:    0,
-			DownloadSize: 0,
-			IsPause:      false,
+			downloadSize: 0,
 			ShardList:    make([]*ShardTask, 0),
 		},
 	}
+	// 分配任务
+	e := task.allocateTask()
+	return task, e
+}
+
+// NewDefaultParallelGetTask 创建一个并发任务对象，自动使用系统临时目录作为分片下载时的临时目录，并设定进度保存文件为下载文件所在目录下
+//
+// url 下载地址
+//
+// filePath 下载文件的保存路径
+//
+// concurrent 多线程下载并发数
+func NewDefaultParallelGetTask(url, filePath string, concurrent int) (*ParallelGetTask, error) {
+	return NewParallelGetTask(url, filePath, fmt.Sprintf("%s-process.json", filePath), concurrent)
 }
 
 // NewParallelGetTaskFromFile 从进度记录文件读取并恢复一个多线程下载任务对象
@@ -82,5 +331,29 @@ func NewParallelGetTaskFromFile(file string) (*ParallelGetTask, error) {
 		logger.ErrorLine("反序列化任务内容出错！")
 		return nil, e
 	}
+	// 设定记录文件位置字段
+	task.Config.processFile = file
+	// 标记为恢复任务
+	task.Config.isRecover = true
+	logger.Info("从文件%s恢复下载任务！\n", file)
 	return &task, nil
+}
+
+// Run 开始执行多线程分片下载任务
+func (task *ParallelGetTask) Run() error {
+	// 创建空白文件
+	if !task.Config.isRecover {
+		e := task.createFile()
+		if e != nil {
+			return e
+		}
+	}
+	// 开始下载文件
+	e := task.downloadShard()
+	if e != nil {
+		return e
+	}
+	// 删除进度文件
+	_ = os.Remove(task.Config.processFile)
+	return nil
 }

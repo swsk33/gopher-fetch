@@ -2,7 +2,9 @@ package gopher_fetch
 
 import (
 	"bufio"
+	"fmt"
 	"io"
+	"math"
 	"os"
 )
 
@@ -91,4 +93,22 @@ func writeFile(content []byte, path string) error {
 		return e
 	}
 	return nil
+}
+
+// 计算网络速度
+// size 一段时间内下载的数据大小，单位字节
+// timeElapsed 经过的时间长度，单位毫秒
+// 返回计算得到的网速，会自动换算单位
+func computeSpeed(size int64, timeElapsed int) string {
+	bytePerSecond := size / int64(timeElapsed) * 1000
+	if 0 <= bytePerSecond && bytePerSecond <= 1024 {
+		return fmt.Sprintf("%4d Byte/s", bytePerSecond)
+	}
+	if bytePerSecond > 1024 && bytePerSecond <= int64(math.Pow(1024, 2)) {
+		return fmt.Sprintf("%6.2f KB/s", float64(bytePerSecond)/1024)
+	}
+	if bytePerSecond > 1024*1024 && bytePerSecond <= int64(math.Pow(1024, 3)) {
+		return fmt.Sprintf("%6.2f MB/s", float64(bytePerSecond)/math.Pow(1024, 2))
+	}
+	return fmt.Sprintf("%6.2f GB/s", float64(bytePerSecond)/math.Pow(1024, 3))
 }
