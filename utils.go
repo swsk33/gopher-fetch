@@ -9,29 +9,6 @@ import (
 	"time"
 )
 
-// 判断文件是否存在
-//
-// filePath 判断的文件或者文件夹路径
-//
-// 返回true说明存在
-func fileExists(filePath string) bool {
-	_, e := os.Stat(filePath)
-	if e == nil {
-		return true
-	}
-	return !os.IsNotExist(e)
-}
-
-// 若指定目录不存在，则创建，包括多级目录
-//
-// folderPath 创建的文件夹
-func mkdirIfNotExists(folderPath string) error {
-	if !fileExists(folderPath) {
-		return os.MkdirAll(folderPath, 0755)
-	}
-	return nil
-}
-
 // 读取文件
 //
 // path 文件路径
@@ -147,18 +124,18 @@ func printProcess(task *ParallelGetTask) {
 			// 保存进度
 			_ = task.saveProcess()
 			// 统计当前并发数
-			task.Status.concurrentTaskCount = checkTaskConcurrentCount(task)
-			if task.Status.concurrentTaskCount == 0 {
+			task.Status.ConcurrentTaskCount = checkTaskConcurrentCount(task)
+			if task.Status.ConcurrentTaskCount == 0 {
 				break
 			}
 			// 统计已下载大小
-			task.Status.downloadSize = computeTaskDownloadSize(task)
+			task.Status.DownloadSize = computeTaskDownloadSize(task)
 			// 计算速度
-			currentDownload := task.Status.downloadSize - lastDownloadSize
-			lastDownloadSize = task.Status.downloadSize
+			currentDownload := task.Status.DownloadSize - lastDownloadSize
+			lastDownloadSize = task.Status.DownloadSize
 			speedString := computeSpeed(currentDownload, 300)
 			// 输出进度
-			realTimeLogger.Info("\r当前并发数：%d 速度：%s 总进度：%3.2f%%", task.Status.concurrentTaskCount, speedString, float32(task.Status.downloadSize)/float32(task.Status.TotalSize)*100)
+			realTimeLogger.Info("\r当前并发数：%d 速度：%s 总进度：%3.2f%%", task.Status.ConcurrentTaskCount, speedString, float32(task.Status.DownloadSize)/float32(task.Status.TotalSize)*100)
 			time.Sleep(300 * time.Millisecond)
 		}
 	}()

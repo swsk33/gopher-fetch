@@ -6,7 +6,8 @@ import "testing"
 func TestParallelGetTask_Run(t *testing.T) {
 	ConfigEnvironmentProxy()
 	// 创建一个分片下载任务
-	task := NewDefaultParallelGetTask("https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe", "downloads/draw.io.exe", 32)
+	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
+	task := NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
 	// 运行分片下载
 	e := task.Run()
 	if e != nil {

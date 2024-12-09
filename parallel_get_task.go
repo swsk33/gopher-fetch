@@ -24,12 +24,12 @@ type ParallelGetTaskConfig struct {
 
 // ParallelGetTaskStatus 多线程下载任务的状态性质属性
 type ParallelGetTaskStatus struct {
-	// 下载文件的总大小
+	// 下载文件的总大小（字节）
 	TotalSize int64 `json:"totalSize"`
-	// 已下载部分的大小
-	downloadSize int64
+	// 已下载部分的大小（字节）
+	DownloadSize int64 `json:"downloadSize"`
 	// 当前并发任务数
-	concurrentTaskCount int
+	ConcurrentTaskCount int `json:"concurrentTaskCount"`
 	// 存放全部分片任务的列表
 	ShardList []*ShardTask `json:"shardList"`
 }
@@ -167,7 +167,7 @@ func NewParallelGetTask(url, filePath, processFile string, concurrent int) *Para
 		},
 		Status: ParallelGetTaskStatus{
 			TotalSize:    0,
-			downloadSize: 0,
+			DownloadSize: 0,
 			ShardList:    make([]*ShardTask, 0),
 		},
 	}
