@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"time"
 )
 
 // 判断文件是否存在
@@ -111,4 +112,54 @@ func computeSpeed(size int64, timeElapsed int) string {
 		return fmt.Sprintf("%6.2f MB/s", float64(bytePerSecond)/math.Pow(1024, 2))
 	}
 	return fmt.Sprintf("%6.2f GB/s", float64(bytePerSecond)/math.Pow(1024, 3))
+}
+
+// 读取一个正在执行的分片下载任务的实际并发数
+//
+// task 分片下载任务对象
+func checkTaskConcurrentCount(task *ParallelGetTask) int {
+	count := 0
+	for _, eachTask := range task.Status.ShardList {
+		if !eachTask.Status.TaskDone {
+			count++
+		}
+	}
+	return count
+}
+
+// 计算一个正在执行的分片下载任务全部已下载部分
+func computeTaskDownloadSize(task *ParallelGetTask) int64 {
+	var size int64 = 0
+	for _, eachTask := range task.Status.ShardList {
+		size += eachTask.Status.DownloadSize
+	}
+	return size
+}
+
+// 在一个单独的线程实时打印一个任务进度
+//
+// task 分片下载任务对象
+func printProcess(task *ParallelGetTask) {
+	go func() {
+		// 上一次下载大小
+		var lastDownloadSize int64 = 0
+		for {
+			// 保存进度
+			_ = task.saveProcess()
+			// 统计当前并发数
+			task.Status.concurrentTaskCount = checkTaskConcurrentCount(task)
+			if task.Status.concurrentTaskCount == 0 {
+				break
+			}
+			// 统计已下载大小
+			task.Status.downloadSize = computeTaskDownloadSize(task)
+			// 计算速度
+			currentDownload := task.Status.downloadSize - lastDownloadSize
+			lastDownloadSize = task.Status.downloadSize
+			speedString := computeSpeed(currentDownload, 300)
+			// 输出进度
+			realTimeLogger.Info("\r当前并发数：%d 速度：%s 总进度：%3.2f%%", task.Status.concurrentTaskCount, speedString, float32(task.Status.downloadSize)/float32(task.Status.TotalSize)*100)
+			time.Sleep(300 * time.Millisecond)
+		}
+	}()
 }
