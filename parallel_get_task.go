@@ -54,15 +54,14 @@ func (task *ParallelGetTask) getLength() error {
 	if response.StatusCode >= 300 {
 		logger.Warn("无法使用HEAD请求，状态码：%d，将使用Get请求重试...\n", response.StatusCode)
 		response, e = httpClient.Get(task.Config.Url)
-		defer func() {
-			if response.Body != nil {
-				_ = response.Body.Close()
-			}
-		}()
 		if e != nil {
 			logger.ErrorLine("发送GET请求获取大小出错！")
 			return e
 		}
+		// 最终直接关闭响应体，不进行读取
+		defer func() {
+			_ = response.Body.Close()
+		}()
 		// 再次检查状态码，若不正确则返回错误
 		if response.StatusCode >= 300 {
 			logger.Error("发送GET请求获取大小出错！状态码：%d\n", response.StatusCode)
