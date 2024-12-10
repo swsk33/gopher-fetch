@@ -55,7 +55,9 @@ func (task *ParallelGetTask) getLength() error {
 		logger.Warn("无法使用HEAD请求，状态码：%d，将使用Get请求重试...\n", response.StatusCode)
 		response, e = httpClient.Get(task.Config.Url)
 		defer func() {
-			_ = response.Body.Close()
+			if response.Body != nil {
+				_ = response.Body.Close()
+			}
 		}()
 		if e != nil {
 			logger.ErrorLine("发送GET请求获取大小出错！")
