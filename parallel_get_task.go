@@ -61,6 +61,11 @@ func (task *ParallelGetTask) getLength() error {
 			logger.ErrorLine("发送GET请求获取大小出错！")
 			return e
 		}
+		// 再次检查状态码，若不正确则返回错误
+		if response.StatusCode >= 300 {
+			logger.Error("发送GET请求获取大小出错！状态码：%d\n", response.StatusCode)
+			return errors.New(fmt.Sprintf("状态码不正确：%d", response.StatusCode))
+		}
 	}
 	// 读取并设定长度
 	task.Status.TotalSize = response.ContentLength
@@ -244,6 +249,10 @@ func (task *ParallelGetTask) Run() error {
 		return e
 	}
 	// 删除进度文件
-	_ = os.Remove(task.Config.processFile)
+	e = os.Remove(task.Config.processFile)
+	if e != nil {
+		logger.Warn("删除进度文件：%s失败！请稍后手动删除！\n", task.Config.processFile)
+		logger.ErrorLine(e.Error())
+	}
 	return nil
 }

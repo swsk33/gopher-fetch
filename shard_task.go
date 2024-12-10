@@ -2,6 +2,7 @@ package gopher_fetch
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool"
 	"io"
@@ -108,6 +109,17 @@ func (task *ShardTask) getShard(pool *tp.TaskPool[*ShardTask]) error {
 		}
 		// 否则，中断并返回错误
 		return e
+	}
+	// 判断状态码
+	if response.StatusCode >= 300 {
+		logger.Error("任务%d请求状态失败！状态码：%d\n", task.Config.Order, response.StatusCode)
+		// 出现错误则视情况重试
+		if task.Status.retryCount < GlobalConfig.Retry {
+			task.retryShard(pool.TaskQueue)
+			return nil
+		}
+		// 否则，中断并返回错误
+		return errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode))
 	}
 	// 读取请求体
 	body := response.Body

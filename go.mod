@@ -2,7 +2,10 @@ module gitee.com/swsk33/gopher-fetch
 
 go 1.18
 
-retract v1.1.0
+retract (
+	v1.1.0
+	v1.1.1
+)
 
 require (
 	gitee.com/swsk33/concurrent-task-pool v1.2.0
