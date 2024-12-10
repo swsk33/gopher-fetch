@@ -44,15 +44,27 @@ type ParallelGetTask struct {
 
 // 获取待下载文件大小
 func (task *ParallelGetTask) getLength() error {
-	// 获取Length
+	// 发送HEAD请求，获取Length
 	response, e := httpClient.Head(task.Config.Url)
 	if e != nil {
 		logger.ErrorLine("发送HEAD请求出错！")
 		return e
 	}
+	// 如果Head不被允许，则切换为Get再试
+	if response.StatusCode >= 300 {
+		logger.Warn("无法使用HEAD请求，状态码：%d，将使用Get请求重试...\n", response.StatusCode)
+		response, e = httpClient.Get(task.Config.Url)
+		defer func() {
+			_ = response.Body.Close()
+		}()
+		if e != nil {
+			logger.ErrorLine("发送GET请求获取大小出错！")
+			return e
+		}
+	}
 	// 读取并设定长度
 	task.Status.TotalSize = response.ContentLength
-	if task.Status.TotalSize == -1 {
+	if task.Status.TotalSize <= 0 {
 		return errors.New("无法获取目标文件大小！")
 	}
 	logger.Info("已获取下载文件大小：%d字节\n", task.Status.TotalSize)
