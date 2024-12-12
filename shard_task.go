@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool/v2"
-	"gitee.com/swsk33/sclog"
 	"io"
 	"net/http"
 	"os"
@@ -62,11 +61,14 @@ func newShardTask(url string, order int, filePath string, rangeStart int64, rang
 }
 
 // 任务重试逻辑
-//
-// queue 并发任务池的任务队列指针，重试时将任务放回队列
-func (task *shardTask) retryShard(pool *tp.TaskPool[*shardTask]) {
+func (task *shardTask) retryShard(pool *tp.TaskPool[*shardTask], file *os.File) {
+	// 修改状态
 	task.Status.retryCount++
 	task.Status.DownloadSize = 0
+	// 重试之前先关闭文件
+	// 否则重试之前的defer操作会在重试之后关闭文件，导致文件损坏
+	_ = file.Close()
+	// 执行重试
 	pool.Retry(task)
 	logger.Warn("将进行第%d次重试...\n", task.Status.retryCount)
 }
@@ -79,11 +81,10 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 		logger.Error("任务%d打开文件失败！\n", task.Config.Order)
 		return e
 	}
+	// 若要进行重试，请先关闭文件
+	// 否则该defer操作可能在重试之后才关闭文件，导致下载的文件损坏
 	defer func() {
-		e = file.Close()
-		if e != nil {
-			sclog.Error("任务%d关闭文件失败！%s\n", task.Config.Order, e)
-		}
+		_ = file.Close()
 	}()
 	// 计算读取位置
 	startIndex := task.Config.RangeStart + task.Status.DownloadSize
@@ -108,18 +109,21 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 		// 出现错误则视情况重试
 		logger.Error("任务%d发送请求失败！\n", task.Config.Order)
 		if task.Status.retryCount < GlobalConfig.Retry {
-			task.retryShard(pool)
+			task.retryShard(pool, file)
 			return nil
 		}
 		// 否则，中断并返回错误
 		return e
 	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
 	// 判断状态码
 	if response.StatusCode >= 300 {
 		logger.Error("任务%d请求状态失败！状态码：%d\n", task.Config.Order, response.StatusCode)
 		// 出现错误则视情况重试
 		if task.Status.retryCount < GlobalConfig.Retry {
-			task.retryShard(pool)
+			task.retryShard(pool, file)
 			return nil
 		}
 		// 否则，中断并返回错误
@@ -127,12 +131,6 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 	}
 	// 读取请求体
 	body := response.Body
-	defer func() {
-		e = body.Close()
-		if e != nil {
-			sclog.Error("任务%d关闭响应体失败！%s\n", task.Config.Order, e)
-		}
-	}()
 	// 读取缓冲区
 	buffer := make([]byte, 8092)
 	// 准备写入文件
@@ -148,7 +146,7 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 				// 视情况重试
 				logger.Error("任务%d读取响应失败！\n", task.Config.Order)
 				if task.Status.retryCount < GlobalConfig.Retry {
-					task.retryShard(pool)
+					task.retryShard(pool, file)
 					return nil
 				}
 				// 否则，中断并返回错误
