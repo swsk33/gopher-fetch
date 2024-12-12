@@ -4,14 +4,15 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	tp "gitee.com/swsk33/concurrent-task-pool"
+	tp "gitee.com/swsk33/concurrent-task-pool/v2"
+	"gitee.com/swsk33/sclog"
 	"io"
 	"net/http"
 	"os"
 )
 
-// ShardTaskConfig 一个分片下载任务的配置性质属性
-type ShardTaskConfig struct {
+// shardTaskConfig 一个分片下载任务的配置性质属性
+type shardTaskConfig struct {
 	// 下载链接
 	Url string `json:"url"`
 	// 分片序号，从1开始
@@ -24,8 +25,8 @@ type ShardTaskConfig struct {
 	RangeEnd int64 `json:"rangeEnd"`
 }
 
-// ShardTaskStatus 一个分片下载任务的状态性质属性
-type ShardTaskStatus struct {
+// shardTaskStatus 一个分片下载任务的状态性质属性
+type shardTaskStatus struct {
 	// 已下载的部分（字节）
 	DownloadSize int64 `json:"downloadSize"`
 	// 该任务是否完成
@@ -34,25 +35,25 @@ type ShardTaskStatus struct {
 	retryCount int
 }
 
-// ShardTask 单个分片下载任务对象
-type ShardTask struct {
+// shardTask 单个分片下载任务对象
+type shardTask struct {
 	// 分片任务配置
-	Config ShardTaskConfig `json:"config"`
+	Config shardTaskConfig `json:"config"`
 	// 分片任务执行状态
-	Status ShardTaskStatus `json:"status"`
+	Status shardTaskStatus `json:"status"`
 }
 
-// NewShardTask 分片任务对象构造函数
-func NewShardTask(url string, order int, filePath string, rangeStart int64, rangeEnd int64) *ShardTask {
-	return &ShardTask{
-		Config: ShardTaskConfig{
+// newShardTask 分片任务对象构造函数
+func newShardTask(url string, order int, filePath string, rangeStart int64, rangeEnd int64) *shardTask {
+	return &shardTask{
+		Config: shardTaskConfig{
 			Url:        url,
 			Order:      order,
 			FilePath:   filePath,
 			RangeStart: rangeStart,
 			RangeEnd:   rangeEnd,
 		},
-		Status: ShardTaskStatus{
+		Status: shardTaskStatus{
 			DownloadSize: 0,
 			TaskDone:     false,
 			retryCount:   0,
@@ -63,24 +64,27 @@ func NewShardTask(url string, order int, filePath string, rangeStart int64, rang
 // 任务重试逻辑
 //
 // queue 并发任务池的任务队列指针，重试时将任务放回队列
-func (task *ShardTask) retryShard(queue *tp.ArrayQueue[*ShardTask]) {
+func (task *shardTask) retryShard(pool *tp.TaskPool[*shardTask]) {
 	task.Status.retryCount++
 	task.Status.DownloadSize = 0
-	queue.Offer(task)
+	pool.Retry(task)
 	logger.Warn("将进行第%d次重试...\n", task.Status.retryCount)
 }
 
 // 下载对应分片，该方法在并发任务池中作为一个异步任务并发调用
-func (task *ShardTask) getShard(pool *tp.TaskPool[*ShardTask]) error {
+func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 	// 打开文件
 	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY, 0755)
-	defer func() {
-		_ = file.Close()
-	}()
 	if e != nil {
 		logger.Error("任务%d打开文件失败！\n", task.Config.Order)
 		return e
 	}
+	defer func() {
+		e = file.Close()
+		if e != nil {
+			sclog.Error("任务%d关闭文件失败！%s\n", task.Config.Order, e)
+		}
+	}()
 	// 计算读取位置
 	startIndex := task.Config.RangeStart + task.Status.DownloadSize
 	// 设定文件指针
@@ -104,7 +108,7 @@ func (task *ShardTask) getShard(pool *tp.TaskPool[*ShardTask]) error {
 		// 出现错误则视情况重试
 		logger.Error("任务%d发送请求失败！\n", task.Config.Order)
 		if task.Status.retryCount < GlobalConfig.Retry {
-			task.retryShard(pool.TaskQueue)
+			task.retryShard(pool)
 			return nil
 		}
 		// 否则，中断并返回错误
@@ -115,7 +119,7 @@ func (task *ShardTask) getShard(pool *tp.TaskPool[*ShardTask]) error {
 		logger.Error("任务%d请求状态失败！状态码：%d\n", task.Config.Order, response.StatusCode)
 		// 出现错误则视情况重试
 		if task.Status.retryCount < GlobalConfig.Retry {
-			task.retryShard(pool.TaskQueue)
+			task.retryShard(pool)
 			return nil
 		}
 		// 否则，中断并返回错误
@@ -124,7 +128,10 @@ func (task *ShardTask) getShard(pool *tp.TaskPool[*ShardTask]) error {
 	// 读取请求体
 	body := response.Body
 	defer func() {
-		_ = body.Close()
+		e = body.Close()
+		if e != nil {
+			sclog.Error("任务%d关闭响应体失败！%s\n", task.Config.Order, e)
+		}
 	}()
 	// 读取缓冲区
 	buffer := make([]byte, 8092)
@@ -141,7 +148,7 @@ func (task *ShardTask) getShard(pool *tp.TaskPool[*ShardTask]) error {
 				// 视情况重试
 				logger.Error("任务%d读取响应失败！\n", task.Config.Order)
 				if task.Status.retryCount < GlobalConfig.Retry {
-					task.retryShard(pool.TaskQueue)
+					task.retryShard(pool)
 					return nil
 				}
 				// 否则，中断并返回错误

@@ -20,7 +20,7 @@ func TestParallelGetTask_Run(t *testing.T) {
 func TestParallelGetTask_Recover(t *testing.T) {
 	ConfigEnvironmentProxy()
 	// 从文件恢复并发任务
-	task, e := NewParallelGetTaskFromFile("downloads/draw.io.exe-process.json")
+	task, e := NewParallelGetTaskFromFile("downloads/draw.io.exe.process.json")
 	if e != nil {
 		t.Error(e)
 		return

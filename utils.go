@@ -17,6 +17,10 @@ import (
 func readFile(path string) ([]byte, error) {
 	// 打开文件
 	file, e := os.OpenFile(path, os.O_RDONLY, 0755)
+	if e != nil {
+		logger.Error("打开文件%s出错！\n", path)
+		return nil, e
+	}
 	defer func() {
 		e = file.Close()
 		if e != nil {
@@ -24,10 +28,6 @@ func readFile(path string) ([]byte, error) {
 			logger.ErrorLine(e.Error())
 		}
 	}()
-	if e != nil {
-		logger.Error("打开文件%s出错！\n", path)
-		return nil, e
-	}
 	// 创建文件读取器
 	reader := bufio.NewReader(file)
 	buffer := make([]byte, 1024)
@@ -52,6 +52,10 @@ func readFile(path string) ([]byte, error) {
 // path 文件保存位置
 func writeFile(content []byte, path string) error {
 	file, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0755)
+	if e != nil {
+		logger.Error("打开文件%s出错！\n", path)
+		return e
+	}
 	defer func() {
 		e = file.Close()
 		if e != nil {
@@ -113,30 +117,37 @@ func computeTaskDownloadSize(task *ParallelGetTask) int64 {
 	return size
 }
 
-// 在一个单独的线程实时打印一个任务进度
+// 更新下载时的实时属性
+func updateRunningStatus(task *ParallelGetTask) {
+	// 统计当前实际并发数
+	task.Status.ConcurrentTaskCount = checkTaskConcurrentCount(task)
+	// 统计已下载大小
+	task.Status.DownloadSize = computeTaskDownloadSize(task)
+}
+
+// 在一个单独的线程实时打印一个任务进度并更新状态
 //
 // task 分片下载任务对象
-func printProcess(task *ParallelGetTask) {
+func printProcessAndUpdateStatus(task *ParallelGetTask) {
 	go func() {
 		// 上一次下载大小
 		var lastDownloadSize int64 = 0
 		for {
 			// 保存进度
 			_ = task.saveProcess()
-			// 统计当前并发数
-			task.Status.ConcurrentTaskCount = checkTaskConcurrentCount(task)
-			if task.Status.ConcurrentTaskCount == 0 {
-				break
-			}
-			// 统计已下载大小
-			task.Status.DownloadSize = computeTaskDownloadSize(task)
+			// 更新状态
+			updateRunningStatus(task)
 			// 计算速度
 			currentDownload := task.Status.DownloadSize - lastDownloadSize
 			lastDownloadSize = task.Status.DownloadSize
 			speedString := computeSpeed(currentDownload, 300)
 			// 输出进度
-			realTimeLogger.Info("\r当前并发数：%d 速度：%s 总进度：%3.2f%%", task.Status.ConcurrentTaskCount, speedString, float32(task.Status.DownloadSize)/float32(task.Status.TotalSize)*100)
-			time.Sleep(300 * time.Millisecond)
+			realTimeLogger.Info("\r当前并发数：%3d 速度：%s 总进度：%3.2f%%", task.Status.ConcurrentTaskCount, speedString, float32(task.Status.DownloadSize)/float32(task.Status.TotalSize)*100)
+			// 结束条件
+			if task.Status.ConcurrentTaskCount == 0 {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
 	}()
 }

@@ -11,5 +11,5 @@ type FetchConfig struct {
 // GlobalConfig 全局下载配置对象
 var GlobalConfig = &FetchConfig{
 	Retry:     5,
-	UserAgent: "GopherFetch/1.1.4",
+	UserAgent: "GopherFetch/1.2.0",
 }
