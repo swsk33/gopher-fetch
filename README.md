@@ -69,7 +69,7 @@ import (
 
 func main() {
 	// 创建下载任务
-	task := gopher_fetch.NewParallelGetTask("http://example.com/file.txt", "downloads/file.txt", "downloads/process.json", 8)
+	task := gopher_fetch.NewParallelGetTask("http://example.com/file.txt", "downloads/file.txt", "downloads/process.json", 0, 8)
 	// 开始下载
 	e := task.Run()
 	if e != nil {
@@ -83,7 +83,8 @@ func main() {
 - 参数`1`：下载的文件地址（文件直链地址）
 - 参数`2`：下载文件的保存路径
 - 参数`3`：下载进度文件的保存位置，在下载任务进行时会实时保存下载进度到进度文件，内容为JSON格式，若传入空字符串`""`表示不记录为进度文件
-- 参数`4`：多线程下载并发数
+- 参数`4`：开始进行下载任务时，分片请求时间间隔，若设为`0`则开始下载时所有分片同时开始请求
+- 参数`5`：多线程下载并发数
 
 此外，还有一个构造函数`NewDefaultParallelGetTask`可以更简单地创建多线程下载任务对象：
 
@@ -91,7 +92,7 @@ func main() {
 task := gopher_fetch.NewDefaultParallelGetTask("http://example.com/file.txt", "downloads/file.txt", 8)
 ```
 
-可见`NewDefaultParallelGetTask`省略了进度文件的保存位置参数，此时会将进度文件保存在下载文件的所在目录下。
+可见`NewDefaultParallelGetTask`省略了进度文件的保存位置和分片请求间隔参数，此时会将进度文件保存在下载文件的所在目录下，且设定分片请求间隔为`0`。
 
 ## 5，从进度文件恢复
 
@@ -134,6 +135,7 @@ func main() {
 - `Url` 文件下载链接
 - `FilePath` 下载文件位置
 - `Concurrent` 下载并发数
+- `ShardStartDelay` 分片请求时间间隔，若设为`0`则开始下载时所有分片同时开始请求
 
 上述`ParallelGetTaskStatus`类型结构体有如下公开属性：
 
