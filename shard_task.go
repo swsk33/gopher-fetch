@@ -4,11 +4,37 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	tp "gitee.com/swsk33/concurrent-task-pool/v2"
 	"io"
 	"net/http"
 	"os"
 )
+
+// 自定义可重试的错误类型
+type retryError struct {
+	// 出现错误的分片编号
+	order int
+	// 下次重试的次数
+	retryCount int
+	// 错误原因
+	reason string
+}
+
+// 表示可重试错误对象类型常量
+var retryErrorType *retryError
+
+// 实现error接口
+func (e *retryError) Error() string {
+	return fmt.Sprintf("分片%d出现错误！原因：%s，将进行第%d次重试...", e.order, e.reason, e.retryCount)
+}
+
+// 创建一个重试错误对象
+func createRetryError(task *shardTask, message string) error {
+	return &retryError{
+		order:      task.Config.Order,
+		retryCount: task.Status.retryCount + 1,
+		reason:     message,
+	}
+}
 
 // shardTaskConfig 一个分片下载任务的配置性质属性
 type shardTaskConfig struct {
@@ -60,45 +86,8 @@ func newShardTask(url string, order int, filePath string, rangeStart int64, rang
 	}
 }
 
-// 自定义可重试的错误类型
-type retryError struct {
-	// 出现错误的分片编号
-	order int
-	// 下次重试的次数
-	retryCount int
-	// 错误原因
-	reason string
-}
-
-// 实现error接口
-func (e *retryError) Error() string {
-	return e.reason
-}
-
-// 创建一个重试错误对象
-func createRetryError(task *shardTask, message string) error {
-	return &retryError{
-		order:      task.Config.Order,
-		retryCount: task.Status.retryCount + 1,
-		reason:     message,
-	}
-}
-
-// 任务重试逻辑
-func (task *shardTask) retryShard(pool *tp.TaskPool[*shardTask], file *os.File) {
-	// 修改状态
-	task.Status.retryCount++
-	// task.Status.DownloadSize = 0
-	// 重试之前先关闭文件
-	// 否则重试之前的defer操作会在重试之后关闭文件，导致文件损坏
-	// _ = file.Close()
-	// 执行重试
-	pool.Retry(task)
-	logger.Warn("将进行第%d次重试...\n", task.Status.retryCount)
-}
-
 // 下载对应分片，该方法在并发任务池中作为一个异步任务并发调用
-func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
+func (task *shardTask) getShard() error {
 	// 打开文件
 	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY, 0755)
 	if e != nil {

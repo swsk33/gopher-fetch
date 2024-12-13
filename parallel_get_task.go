@@ -137,13 +137,16 @@ func (task *ParallelGetTask) downloadShard() error {
 				logger.Warn("分片任务%d已下载完成，无需继续下载！\n", shardTask.Config.Order)
 				return
 			}
-			e := shardTask.getShard(pool)
+			e := shardTask.getShard()
 			if e != nil {
-				// 判断是否是可重试错误
-				var retryError *retryError
-				if errors.As(e, &retryError) {
-
+				// 判断是否是可重试错误，若是则执行重试逻辑
+				if errors.As(e, &retryErrorType) {
+					logger.WarnLine(e.Error())
+					shardTask.Status.retryCount++
+					pool.Retry(shardTask)
+					return
 				}
+				// 否则，中断整个任务
 				totalError = e
 				pool.Interrupt()
 			}
