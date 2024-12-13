@@ -139,6 +139,11 @@ func (task *ParallelGetTask) downloadShard() error {
 			}
 			e := shardTask.getShard(pool)
 			if e != nil {
+				// 判断是否是可重试错误
+				var retryError *retryError
+				if errors.As(e, &retryError) {
+
+				}
 				totalError = e
 				pool.Interrupt()
 			}

@@ -60,14 +60,38 @@ func newShardTask(url string, order int, filePath string, rangeStart int64, rang
 	}
 }
 
+// 自定义可重试的错误类型
+type retryError struct {
+	// 出现错误的分片编号
+	order int
+	// 下次重试的次数
+	retryCount int
+	// 错误原因
+	reason string
+}
+
+// 实现error接口
+func (e *retryError) Error() string {
+	return e.reason
+}
+
+// 创建一个重试错误对象
+func createRetryError(task *shardTask, message string) error {
+	return &retryError{
+		order:      task.Config.Order,
+		retryCount: task.Status.retryCount + 1,
+		reason:     message,
+	}
+}
+
 // 任务重试逻辑
 func (task *shardTask) retryShard(pool *tp.TaskPool[*shardTask], file *os.File) {
 	// 修改状态
 	task.Status.retryCount++
-	task.Status.DownloadSize = 0
+	// task.Status.DownloadSize = 0
 	// 重试之前先关闭文件
 	// 否则重试之前的defer操作会在重试之后关闭文件，导致文件损坏
-	_ = file.Close()
+	// _ = file.Close()
 	// 执行重试
 	pool.Retry(task)
 	logger.Warn("将进行第%d次重试...\n", task.Status.retryCount)
@@ -81,8 +105,6 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 		logger.Error("任务%d打开文件失败！\n", task.Config.Order)
 		return e
 	}
-	// 若要进行重试，请先关闭文件
-	// 否则该defer操作可能在重试之后才关闭文件，导致下载的文件损坏
 	defer func() {
 		_ = file.Close()
 	}()
@@ -105,12 +127,11 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 	request.Header.Set("User-Agent", GlobalConfig.UserAgent)
 	// 发送请求
 	response, e := httpClient.Do(request)
+	// 出现错误则视情况重试
 	if e != nil {
-		// 出现错误则视情况重试
-		logger.Error("任务%d发送请求失败！\n", task.Config.Order)
+		// 未到最大重试次数，返回重试错误
 		if task.Status.retryCount < GlobalConfig.Retry {
-			task.retryShard(pool, file)
-			return nil
+			return createRetryError(task, "发送下载请求失败！")
 		}
 		// 否则，中断并返回错误
 		return e
@@ -119,12 +140,11 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 		_ = response.Body.Close()
 	}()
 	// 判断状态码
+	// 出现错误则视情况重试
 	if response.StatusCode >= 300 {
-		logger.Error("任务%d请求状态失败！状态码：%d\n", task.Config.Order, response.StatusCode)
-		// 出现错误则视情况重试
+		// 未到最大重试次数，返回重试错误
 		if task.Status.retryCount < GlobalConfig.Retry {
-			task.retryShard(pool, file)
-			return nil
+			return createRetryError(task, fmt.Sprintf("发送下载请求失败！状态码不正确:%d", response.StatusCode))
 		}
 		// 否则，中断并返回错误
 		return errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode))
@@ -144,10 +164,9 @@ func (task *shardTask) getShard(pool *tp.TaskPool[*shardTask]) error {
 				break
 			} else {
 				// 视情况重试
-				logger.Error("任务%d读取响应失败！\n", task.Config.Order)
+				// 未到最大重试次数，返回重试错误
 				if task.Status.retryCount < GlobalConfig.Retry {
-					task.retryShard(pool, file)
-					return nil
+					return createRetryError(task, "读取响应体失败！")
 				}
 				// 否则，中断并返回错误
 				return e
