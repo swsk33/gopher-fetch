@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool/v2"
+	"net/http"
 	"os"
 	"time"
 )
@@ -48,7 +49,7 @@ type ParallelGetTask struct {
 // 获取待下载文件大小
 func (task *ParallelGetTask) getLength() error {
 	// 发送HEAD请求，获取Length
-	response, e := httpClient.Head(task.Config.Url)
+	response, e := sendRequest(task.Config.Url, http.MethodHead, -1, -1)
 	if e != nil {
 		logger.ErrorLine("发送HEAD请求出错！")
 		return e
@@ -56,7 +57,7 @@ func (task *ParallelGetTask) getLength() error {
 	// 如果Head不被允许，则切换为Get再试
 	if response.StatusCode >= 300 {
 		logger.Warn("无法使用HEAD请求，状态码：%d，将使用Get请求重试...\n", response.StatusCode)
-		response, e = httpClient.Get(task.Config.Url)
+		response, e = sendRequest(task.Config.Url, http.MethodGet, -1, -1)
 		if e != nil {
 			logger.ErrorLine("发送GET请求获取大小出错！")
 			return e

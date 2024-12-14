@@ -105,17 +105,8 @@ func (task *shardTask) getShard() error {
 		logger.Error("任务%d设定文件指针失败！\n", task.Config.Order)
 		return e
 	}
-	// 准备请求
-	request, e := http.NewRequest("GET", task.Config.Url, nil)
-	if e != nil {
-		logger.Error("任务%d创建请求出错！\n", task.Config.Order)
-		return e
-	}
-	// 设定请求头
-	request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", startIndex, task.Config.RangeEnd))
-	request.Header.Set("User-Agent", GlobalConfig.UserAgent)
 	// 发送请求
-	response, e := httpClient.Do(request)
+	response, e := sendRequest(task.Config.Url, http.MethodGet, startIndex, task.Config.RangeEnd)
 	// 出现错误则视情况重试
 	if e != nil {
 		// 未到最大重试次数，返回重试错误
