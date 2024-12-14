@@ -51,8 +51,14 @@ gopher_fetch.ConfigDisableProxy()
 ```go
 // 使用自定义UserAgent请求头为Chrome的
 gopher_fetch.GlobalConfig.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
 // 设定每个分片的最大重试次数为10（默认为5）
 gopher_fetch.GlobalConfig.Retry = 10
+
+// 增加一些其它的自定义请求头
+// GlobalConfig.Headers实际上是map[string]string类型
+gopher_fetch.GlobalConfig.Headers["Origin"] = "example.com"
+gopher_fetch.GlobalConfig.Headers["Authorization"] = "Bearer eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSld..."
 ```
 
 ## 4，执行多线程下载
