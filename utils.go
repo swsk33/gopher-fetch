@@ -6,7 +6,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"time"
 )
 
 // 读取文件
@@ -123,31 +122,4 @@ func updateRunningStatus(task *ParallelGetTask) {
 	task.Status.ConcurrentTaskCount = checkTaskConcurrentCount(task)
 	// 统计已下载大小
 	task.Status.DownloadSize = computeTaskDownloadSize(task)
-}
-
-// 在一个单独的线程实时打印一个任务进度并更新状态
-//
-// task 分片下载任务对象
-func printProcessAndUpdateStatus(task *ParallelGetTask) {
-	go func() {
-		// 上一次下载大小
-		var lastDownloadSize int64 = 0
-		for {
-			// 保存进度
-			_ = task.saveProcess()
-			// 更新状态
-			updateRunningStatus(task)
-			// 计算速度
-			currentDownload := task.Status.DownloadSize - lastDownloadSize
-			lastDownloadSize = task.Status.DownloadSize
-			speedString := computeSpeed(currentDownload, 300)
-			// 输出进度
-			realTimeLogger.Info("\r当前并发数：%3d 速度：%s 总进度：%3.2f%%", task.Status.ConcurrentTaskCount, speedString, float32(task.Status.DownloadSize)/float32(task.Status.TotalSize)*100)
-			// 结束条件
-			if task.Status.ConcurrentTaskCount == 0 {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
 }

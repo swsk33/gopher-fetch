@@ -16,6 +16,19 @@ func TestParallelGetTask_Run(t *testing.T) {
 		t.Error(e)
 		return
 	}
+	// 计算摘要
+	result, e := task.CheckFile(ChecksumSha256, "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982")
+	if e != nil {
+		t.Error(e)
+		return
+	}
+	if result {
+		logger.InfoLine("文件未损坏！")
+	} else {
+		logger.ErrorLine("文件损坏！")
+		t.Error("文件下载损坏！")
+		t.Fail()
+	}
 }
 
 // 测试从文件恢复并发任务运行
@@ -31,5 +44,18 @@ func TestParallelGetTask_Recover(t *testing.T) {
 	if e != nil {
 		t.Error(e)
 		return
+	}
+	// 计算摘要
+	result, e := task.CheckFile(ChecksumSha256, "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982")
+	if e != nil {
+		t.Error(e)
+		return
+	}
+	if result {
+		logger.InfoLine("文件未损坏！")
+	} else {
+		logger.ErrorLine("文件损坏！")
+		t.Error("文件下载损坏！")
+		t.Fail()
 	}
 }

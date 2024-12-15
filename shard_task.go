@@ -124,7 +124,7 @@ func (task *shardTask) getShard() error {
 	if response.StatusCode >= 300 {
 		// 未到最大重试次数，返回重试错误
 		if task.Status.retryCount < GlobalConfig.Retry {
-			return createRetryError(task, fmt.Sprintf("发送下载请求失败！状态码不正确:%d", response.StatusCode))
+			return createRetryError(task, fmt.Sprintf("发送下载请求失败！状态码不正确：%d", response.StatusCode))
 		}
 		// 否则，中断并返回错误
 		return errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode))
