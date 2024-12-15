@@ -9,4 +9,5 @@
 *.exe
 
 # 自定义
-downloads/
+/downloads/
+/doc_main/

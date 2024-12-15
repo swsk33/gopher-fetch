@@ -6,6 +6,7 @@
 - 指定线程数的并发下载
 - 支持配置例如代理、`UserAgent`等
 - 支持进度实时持久化和恢复
+- 文件校验
 
 ## 2，安装依赖
 
@@ -38,8 +39,10 @@ gopher_fetch.ConfigEnableLogger(false)
 // 自动从环境变量读取代理配置
 // 当环境变量存在http_proxy和https_proxy时，则会读取这两个环境变量的代理服务器值，环境变量名可大写
 gopher_fetch.ConfigEnvironmentProxy()
+
 // 手动配置代理服务器，格式必须正确
 gopher_fetch.ConfigSetProxy("http://127.0.0.1:1234")
+
 // 关闭代理
 gopher_fetch.ConfigDisableProxy()
 ```
@@ -129,7 +132,57 @@ func main() {
 
 请勿手动修改保存的下载进度文件或者删除已下载的文件部分，否则无法正确恢复下载进度！
 
-## 6，`ParallelGetTask`的属性
+## 6，文件校验
+
+如果我们已经知道了下载的文件的摘要值（例如`MD5`、`SHA1`等等），就可以在下载完成之后对比文件摘要值，检查下载的文件是否损坏。通过`ParallelGetTask`对象的`CheckFile`方法，我们就可以在下载完成文件后进一步地校验文件：
+
+```go
+package main
+
+import (
+	"fmt"
+	"gitee.com/swsk33/gopher-fetch"
+)
+
+func main() {
+	// 环境变量获取代理
+	gopher_fetch.ConfigEnvironmentProxy()
+	// 创建一个分片下载任务
+	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
+	task := gopher_fetch.NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
+	// 运行分片下载
+	e := task.Run()
+	if e != nil {
+		fmt.Printf("下载文件出错！%s\n", e)
+		return
+	}
+	// 下载完成后，计算摘要，以SHA256比对为例
+	// 原本文件的SHA256值
+	excepted := "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982"
+	result, e := task.CheckFile(gopher_fetch.ChecksumSha256, excepted)
+	if e != nil {
+		fmt.Printf("计算文件摘要出错！%s\n", e)
+		return
+	}
+	if result {
+		fmt.Println("文件未损坏！")
+	} else {
+		fmt.Println("文件损坏！")
+	}
+}
+```
+
+在执行`Run`方法完成下载之后，调用`CheckFile`方法检查已下载文件的摘要值是否和期望值匹配，该方法的参数如下：
+
+- 参数`1`：指定摘要算法名称，可选的值有：
+	- `gopher_fetch.ChecksumMd5` 使用MD5算法
+	- `gopher_fetch.ChecksumSha1` 使用SHA1算法
+	- `gopher_fetch.ChecksumSha256` 使用SHA256算法
+- 参数`2`：期望的文件摘要，即下载的文件的原始摘要值，不区分大小写
+
+当摘要匹配时返回`true`，说明文件未在下载过程中损坏，若计算摘要的过程中出现错误则会返回错误对象。
+
+## 7，`ParallelGetTask`的属性
 
 `ParallelGetTask`是核心的多线程下载任务对象，它有下列公开属性：
 
