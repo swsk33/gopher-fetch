@@ -4,39 +4,13 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"gitee.com/swsk33/gopher-notify"
 	"io"
 	"net/http"
 	"os"
 )
 
-// 自定义可重试的错误类型
-type retryError struct {
-	// 出现错误的分片编号
-	order int
-	// 下次重试的次数
-	retryCount int
-	// 错误原因
-	reason string
-}
-
-// 表示可重试错误对象类型常量
-var retryErrorType *retryError
-
-// 实现error接口
-func (e *retryError) Error() string {
-	return fmt.Sprintf("分片%d出现错误！原因：%s，将进行第%d次重试...", e.order, e.reason, e.retryCount)
-}
-
-// 创建一个重试错误对象
-func createRetryError(task *shardTask, message string) error {
-	return &retryError{
-		order:      task.Config.Order,
-		retryCount: task.Status.retryCount + 1,
-		reason:     message,
-	}
-}
-
-// shardTaskConfig 一个分片下载任务的配置性质属性
+// 一个分片下载任务的配置性质属性
 type shardTaskConfig struct {
 	// 下载链接
 	Url string `json:"url"`
@@ -50,7 +24,7 @@ type shardTaskConfig struct {
 	RangeEnd int64 `json:"rangeEnd"`
 }
 
-// shardTaskStatus 一个分片下载任务的状态性质属性
+// 一个分片下载任务的状态性质属性
 type shardTaskStatus struct {
 	// 已下载的部分（字节）
 	DownloadSize int64 `json:"downloadSize"`
@@ -66,10 +40,12 @@ type shardTask struct {
 	Config shardTaskConfig `json:"config"`
 	// 分片任务执行状态
 	Status shardTaskStatus `json:"status"`
+	// 用于实时发布下载状态变化的发布者
+	statusPublisher *gopher_notify.BasePublisher[string, int64]
 }
 
 // newShardTask 分片任务对象构造函数
-func newShardTask(url string, order int, filePath string, rangeStart int64, rangeEnd int64) *shardTask {
+func newShardTask(url string, order int, filePath string, rangeStart int64, rangeEnd int64, broker *gopher_notify.Broker[string, int64]) *shardTask {
 	return &shardTask{
 		Config: shardTaskConfig{
 			Url:        url,
@@ -83,6 +59,7 @@ func newShardTask(url string, order int, filePath string, rangeStart int64, rang
 			TaskDone:     false,
 			retryCount:   0,
 		},
+		statusPublisher: gopher_notify.NewBasePublisher[string, int64](broker),
 	}
 }
 
@@ -165,8 +142,12 @@ func (task *shardTask) getShard() error {
 		}
 		// 记录下载进度
 		task.Status.DownloadSize += int64(readSize)
+		// 发布下载大小变化事件
+		task.statusPublisher.Publish(gopher_notify.NewEvent(sizeAdd, int64(readSize)), false)
 	}
 	// 标记任务完成
 	task.Status.TaskDone = true
+	// 发布分片任务完成事件
+	task.statusPublisher.Publish(gopher_notify.NewEvent(shardDone, int64(0)), false)
 	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool/v2"
+	"gitee.com/swsk33/gopher-notify"
 	"hash"
 	"io"
 	"net/http"
@@ -60,6 +61,8 @@ type ParallelGetTask struct {
 	Config ParallelGetTaskConfig `json:"config"`
 	// 下载任务状态
 	Status ParallelGetTaskStatus `json:"status"`
+	// 接收每个分片任务的下载事件变化的事件总线
+	shardBroker *gopher_notify.Broker[string, int64]
 }
 
 // NewParallelGetTask 构造函数，用于创建一个全新的分片下载任务
@@ -85,6 +88,7 @@ func NewParallelGetTask(url, filePath, processFile string, shardRequestDelay tim
 			DownloadSize: 0,
 			ShardList:    make([]*shardTask, 0),
 		},
+		shardBroker: gopher_notify.NewBroker[string, int64](),
 	}
 }
 
@@ -119,6 +123,8 @@ func NewParallelGetTaskFromFile(file string) (*ParallelGetTask, error) {
 	task.Config.processFile = file
 	// 标记为恢复任务
 	task.Config.isRecover = true
+	// 创建事件总线与发布者对象
+	task.shardBroker = gopher_notify.NewBroker[string, int64]()
 	logger.Info("从文件%s恢复下载任务！\n", file)
 	return &task, nil
 }
@@ -173,7 +179,14 @@ func (task *ParallelGetTask) allocateTask() {
 	eachSize := task.Status.TotalSize / int64(task.Config.Concurrent)
 	// 创建分片任务对象
 	for i := 0; i < task.Config.Concurrent; i++ {
-		task.Status.ShardList = append(task.Status.ShardList, newShardTask(task.Config.Url, i+1, task.Config.FilePath, int64(i)*eachSize, int64(i+1)*eachSize-1))
+		task.Status.ShardList = append(task.Status.ShardList, newShardTask(
+			task.Config.Url,
+			i+1,
+			task.Config.FilePath,
+			int64(i)*eachSize,
+			int64(i+1)*eachSize-1,
+			task.shardBroker,
+		))
 	}
 	// 处理末尾部分
 	if task.Status.TotalSize%int64(task.Config.Concurrent) != 0 {
@@ -205,10 +218,15 @@ func (task *ParallelGetTask) createFile() error {
 
 // 开始下载全部分片
 func (task *ParallelGetTask) downloadShard() error {
+	// 更新自己的状态
+	for _, shard := range task.Status.ShardList {
+		task.Status.TotalSize += shard.Status.DownloadSize
+		if !shard.Status.TaskDone {
+			task.Status.ConcurrentTaskCount++
+		}
+	}
 	// 全局错误
 	var totalError error
-	// 上一次下载大小
-	var lastDownloadSize int64 = 0
 	// 创建并发任务池，下载分片数据
 	taskPool := tp.NewTaskPool[*shardTask](task.Config.Concurrent, task.Config.ShardStartDelay, 0, task.Status.ShardList,
 		// 每个分片任务下载逻辑
@@ -237,22 +255,14 @@ func (task *ParallelGetTask) downloadShard() error {
 		func(pool *tp.TaskPool[*shardTask]) {
 			totalError = errors.New("任务被中断！")
 		},
-		// 下载时的实时检查逻辑，用于实时更新任务状态
+		// 下载时每隔一段时间保存状态
 		func(pool *tp.TaskPool[*shardTask]) {
-			// 保存进度
 			_ = task.saveProcess()
-			// 更新状态
-			updateRunningStatus(task)
-			// 计算速度
-			currentDownload := task.Status.DownloadSize - lastDownloadSize
-			lastDownloadSize = task.Status.DownloadSize
-			// 计算间隔（毫秒）
-			interval := 300
-			speedString := computeSpeed(currentDownload, interval)
-			// 输出进度
-			realTimeLogger.Info("\r当前并发数：%3d 速度：%s 总进度：%3.2f%%", task.Status.ConcurrentTaskCount, speedString, float32(task.Status.DownloadSize)/float32(task.Status.TotalSize)*100)
-			time.Sleep(time.Duration(interval) * time.Millisecond)
+			time.Sleep(500 * time.Millisecond)
 		})
+	// 创建订阅者，接收分片任务的下载变化事件
+	task.shardBroker.Subscribe(sizeAdd, &sizeChangeSubscriber{task})
+	task.shardBroker.Subscribe(shardDone, &shardDoneSubscriber{task})
 	// 启动分片下载任务
 	logger.InfoLine("开始执行分片下载...")
 	// 启动分片下载
