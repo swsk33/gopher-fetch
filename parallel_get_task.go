@@ -63,6 +63,8 @@ type ParallelGetTask struct {
 	Status ParallelGetTaskStatus `json:"status"`
 	// 接收每个分片任务的下载事件变化的事件总线
 	shardBroker *gopher_notify.Broker[string, int64]
+	// 用户观察该下载任务状态的主题对象
+	statusSubject *gopher_notify.Subject[*TaskStatus]
 }
 
 // NewParallelGetTask 构造函数，用于创建一个全新的分片下载任务
@@ -88,7 +90,8 @@ func NewParallelGetTask(url, filePath, processFile string, shardRequestDelay tim
 			DownloadSize: 0,
 			ShardList:    make([]*shardTask, 0),
 		},
-		shardBroker: gopher_notify.NewBroker[string, int64](),
+		shardBroker:   gopher_notify.NewBroker[string, int64](),
+		statusSubject: gopher_notify.NewSubject[*TaskStatus](),
 	}
 }
 
@@ -123,8 +126,9 @@ func NewParallelGetTaskFromFile(file string) (*ParallelGetTask, error) {
 	task.Config.processFile = file
 	// 标记为恢复任务
 	task.Config.isRecover = true
-	// 创建事件总线与发布者对象
+	// 创建事件总线与主题对象
 	task.shardBroker = gopher_notify.NewBroker[string, int64]()
+	task.statusSubject = gopher_notify.NewSubject[*TaskStatus]()
 	logger.Info("从文件%s恢复下载任务！\n", file)
 	return &task, nil
 }
@@ -359,4 +363,15 @@ func (task *ParallelGetTask) CheckFile(algorithm, excepted string) (bool, error)
 	logger.Info("期望：%s\n", exceptedLower)
 	logger.Info("实际：%s\n", fileHash)
 	return fileHash == exceptedLower, nil
+}
+
+// SubscribeStatus 订阅该下载任务的状态
+//
+//   - lookup 观察者回调函数，当下载状态发生变化时，例如下载进度增加、实际并发数变化等，该函数就会被调用，此外当前的状态对象会通过回调函数传入
+func (task *ParallelGetTask) SubscribeStatus(lookup func(status *TaskStatus)) {
+	// 注册观察者
+	task.statusSubject.Register(&parallelGetTaskObserver{
+		task:              task,
+		subscribeFunction: lookup,
+	})
 }

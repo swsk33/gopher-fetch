@@ -93,33 +93,3 @@ func computeSpeed(size int64, timeElapsed int) string {
 	}
 	return fmt.Sprintf("%6.2f GB/s", float64(bytePerSecond)/math.Pow(1024, 3))
 }
-
-// 读取一个正在执行的分片下载任务的实际并发数
-//
-// task 分片下载任务对象
-func checkTaskConcurrentCount(task *ParallelGetTask) int {
-	count := 0
-	for _, eachTask := range task.Status.ShardList {
-		if !eachTask.Status.TaskDone {
-			count++
-		}
-	}
-	return count
-}
-
-// 计算一个正在执行的分片下载任务全部已下载部分
-func computeTaskDownloadSize(task *ParallelGetTask) int64 {
-	var size int64 = 0
-	for _, eachTask := range task.Status.ShardList {
-		size += eachTask.Status.DownloadSize
-	}
-	return size
-}
-
-// 更新下载时的实时属性
-func updateRunningStatus(task *ParallelGetTask) {
-	// 统计当前实际并发数
-	task.Status.ConcurrentTaskCount = checkTaskConcurrentCount(task)
-	// 统计已下载大小
-	task.Status.DownloadSize = computeTaskDownloadSize(task)
-}

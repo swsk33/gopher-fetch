@@ -1,6 +1,9 @@
 package gopher_fetch
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 // 测试并发下载运行
 func TestParallelGetTask_Run(t *testing.T) {
@@ -41,6 +44,38 @@ func TestParallelGetTask_Recover(t *testing.T) {
 		return
 	}
 	e = task.Run()
+	if e != nil {
+		t.Error(e)
+		return
+	}
+	// 计算摘要
+	result, e := task.CheckFile(ChecksumSha256, "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982")
+	if e != nil {
+		t.Error(e)
+		return
+	}
+	if result {
+		logger.InfoLine("文件未损坏！")
+	} else {
+		logger.ErrorLine("文件损坏！")
+		t.Error("文件下载损坏！")
+		t.Fail()
+	}
+}
+
+// 测试下载文件并订阅进度
+func TestParallelGetTask_SubscribeStatus(t *testing.T) {
+	ConfigEnvironmentProxy()
+	// 创建一个分片下载任务
+	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
+	task := NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
+	// 监听分片任务的下载状态
+	task.SubscribeStatus(func(status *TaskStatus) {
+		fmt.Printf("\r已下载：%d / %d，当前并发数：%d", status.DownloadSize, task.Status.TotalSize, status.Concurrency)
+	})
+	// 运行分片下载
+	e := task.Run()
+	fmt.Println()
 	if e != nil {
 		t.Error(e)
 		return
