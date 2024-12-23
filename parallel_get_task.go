@@ -90,8 +90,8 @@ func NewParallelGetTask(url, filePath, processFile string, shardRequestDelay tim
 			DownloadSize: 0,
 			ShardList:    make([]*shardTask, 0),
 		},
-		shardBroker:   gopher_notify.NewBroker[string, int64](),
-		statusSubject: gopher_notify.NewSubject[*TaskStatus](),
+		shardBroker:   gopher_notify.NewBroker[string, int64](concurrent),
+		statusSubject: gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration),
 	}
 }
 
@@ -127,8 +127,11 @@ func NewParallelGetTaskFromFile(file string) (*ParallelGetTask, error) {
 	// 标记为恢复任务
 	task.Config.isRecover = true
 	// 创建事件总线与主题对象
-	task.shardBroker = gopher_notify.NewBroker[string, int64]()
-	task.statusSubject = gopher_notify.NewSubject[*TaskStatus]()
+	task.shardBroker = gopher_notify.NewBroker[string, int64](task.Config.Concurrent)
+	task.statusSubject = gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration)
+	for _, shard := range task.Status.ShardList {
+		shard.statusPublisher = gopher_notify.NewBasePublisher[string, int64](task.shardBroker)
+	}
 	logger.Info("从文件%s恢复下载任务！\n", file)
 	return &task, nil
 }
@@ -223,8 +226,12 @@ func (task *ParallelGetTask) createFile() error {
 // 开始下载全部分片
 func (task *ParallelGetTask) downloadShard() error {
 	// 更新自己的状态
+	if task.Config.isRecover {
+		task.Status.DownloadSize = 0
+		task.Status.ConcurrentTaskCount = 0
+	}
 	for _, shard := range task.Status.ShardList {
-		task.Status.TotalSize += shard.Status.DownloadSize
+		task.Status.DownloadSize += shard.Status.DownloadSize
 		if !shard.Status.TaskDone {
 			task.Status.ConcurrentTaskCount++
 		}
@@ -271,8 +278,8 @@ func (task *ParallelGetTask) downloadShard() error {
 	logger.InfoLine("开始执行分片下载...")
 	// 启动分片下载
 	taskPool.Start()
-	// 完成后换行输出一次
-	realTimeLogger.InfoLine("")
+	// 完成下载，换行一次
+	fmt.Println()
 	logger.Info("文件：%s下载完成！\n", task.Config.FilePath)
 	return totalError
 }
@@ -320,6 +327,9 @@ func (task *ParallelGetTask) Run() error {
 		logger.Warn("删除进度文件：%s失败！请稍后手动删除！\n", task.Config.processFile)
 		logger.ErrorLine(e.Error())
 	}
+	// 释放部分资源
+	task.statusSubject.RemoveAll()
+	task.shardBroker.Close()
 	return nil
 }
 
@@ -365,13 +375,16 @@ func (task *ParallelGetTask) CheckFile(algorithm, excepted string) (bool, error)
 	return fileHash == exceptedLower, nil
 }
 
-// SubscribeStatus 订阅该下载任务的状态
+// SubscribeStatus 订阅该下载任务的实时下载状态
 //
-//   - lookup 观察者回调函数，当下载状态发生变化时，例如下载进度增加、实际并发数变化等，该函数就会被调用，此外当前的状态对象会通过回调函数传入
-func (task *ParallelGetTask) SubscribeStatus(lookup func(status *TaskStatus)) {
+//   - lookup 观察者回调函数，当下载状态发生变化时，例如下载进度增加、实际并发数变化等，该函数就会被调用，其参数：
+//     status 当前的下载状态对象
+//     speedString 当前下载速度的字符串表示，若 GlobalConfig.StatusNotifyDuration 设为0或者负数，则 speedString 为空字符串
+func (task *ParallelGetTask) SubscribeStatus(lookup func(status *TaskStatus, speedString string)) {
 	// 注册观察者
 	task.statusSubject.Register(&parallelGetTaskObserver{
 		task:              task,
 		subscribeFunction: lookup,
+		lastSize:          task.Status.DownloadSize,
 	})
 }

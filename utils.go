@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"time"
 )
 
 // 读取文件
@@ -78,18 +79,27 @@ func writeFile(content []byte, path string) error {
 
 // 计算网络速度
 // size 一段时间内下载的数据大小，单位字节
-// timeElapsed 经过的时间长度，单位毫秒
+// timeElapsed 经过的时间长度
 // 返回计算得到的网速，会自动换算单位
-func computeSpeed(size int64, timeElapsed int) string {
-	bytePerSecond := size / int64(timeElapsed) * 1000
-	if 0 <= bytePerSecond && bytePerSecond <= 1024 {
-		return fmt.Sprintf("%4d Byte/s", bytePerSecond)
+func computeSpeed(size int64, timeElapsed time.Duration) string {
+	if timeElapsed < 0 {
+		return ""
 	}
-	if bytePerSecond > 1024 && bytePerSecond <= int64(math.Pow(1024, 2)) {
+	elapsedSecond := float64(timeElapsed) / float64(time.Second)
+	bytePerSecond := float64(size) / elapsedSecond
+	if 0 <= bytePerSecond && bytePerSecond <= 1024 {
+		return fmt.Sprintf("%4.2f Byte/s", bytePerSecond)
+	}
+	if bytePerSecond > 1024 && bytePerSecond <= math.Pow(1024, 2) {
 		return fmt.Sprintf("%6.2f KB/s", float64(bytePerSecond)/1024)
 	}
-	if bytePerSecond > 1024*1024 && bytePerSecond <= int64(math.Pow(1024, 3)) {
-		return fmt.Sprintf("%6.2f MB/s", float64(bytePerSecond)/math.Pow(1024, 2))
+	if bytePerSecond > 1024*1024 && bytePerSecond <= math.Pow(1024, 3) {
+		return fmt.Sprintf("%6.2f MB/s", bytePerSecond/math.Pow(1024, 2))
 	}
-	return fmt.Sprintf("%6.2f GB/s", float64(bytePerSecond)/math.Pow(1024, 3))
+	return fmt.Sprintf("%6.2f GB/s", bytePerSecond/math.Pow(1024, 3))
+}
+
+// DefaultProcessLookup 默认的进度观察者回调函数，能够在控制台输出实时进度
+func DefaultProcessLookup(status *TaskStatus, speedString string) {
+	realTimeLogger.Info("\r当前下载进度：%6.2f%%，实际并发数：%4d，当前速度：%s", float64(status.DownloadSize)/float64(status.TotalSize)*100, status.Concurrency, speedString)
 }
