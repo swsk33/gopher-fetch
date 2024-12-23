@@ -7,6 +7,7 @@
 - 支持配置例如代理、`UserAgent`等
 - 支持进度实时持久化和恢复
 - 文件校验
+- 实时下载进度的监听
 
 ## 2，安装依赖
 
@@ -49,19 +50,22 @@ gopher_fetch.ConfigDisableProxy()
 
 ### (3) 下载配置
 
-通过修改全局配置结构体对象`GlobalConfig`以修改一些下载相关配置：
+可根据自己的需要，通过修改全局配置结构体对象`GlobalConfig`以修改一些下载相关配置：
 
 ```go
 // 使用自定义UserAgent请求头为Chrome的
 gopher_fetch.GlobalConfig.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-// 设定每个分片的最大重试次数为10（默认为5）
+// 设定每个分片的最大重试次数为10（默认：5）
 gopher_fetch.GlobalConfig.Retry = 10
 
 // 增加一些其它的自定义请求头
 // GlobalConfig.Headers实际上是map[string]string类型
 gopher_fetch.GlobalConfig.Headers["Origin"] = "example.com"
 gopher_fetch.GlobalConfig.Headers["Authorization"] = "Bearer eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSld..."
+
+// 设定实时下载状态监听间隔为1s（默认：300ms）
+gopher_fetch.GlobalConfig.StatusNotifyDuration = 1 * time.Second
 ```
 
 ## 4，执行多线程下载
@@ -182,7 +186,80 @@ func main() {
 
 当摘要匹配时返回`true`，说明文件未在下载过程中损坏，若计算摘要的过程中出现错误则会返回错误对象。
 
-## 7，`ParallelGetTask`的属性
+## 7，实时下载状态监听
+
+基于观察者模式以及发布-订阅模式，该类库还实现了用户自定义下载状态实时监听的功能，通过`ParallelGetTask`对象的`SubscribeStatus`方法，传入一个自定义的观察者回调函数，即可实现进度实时监听：
+
+```go
+package main
+
+import (
+	"fmt"
+	"gitee.com/swsk33/gopher-fetch"
+	"time"
+)
+
+func main() {
+	// 环境变量获取代理
+	gopher_fetch.ConfigEnvironmentProxy()
+	// 设定实时下载状态监听间隔为1s
+	gopher_fetch.GlobalConfig.StatusNotifyDuration = 1 * time.Second
+	// 创建一个分片下载任务
+	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
+	task := gopher_fetch.NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
+	// 注册监听进度回调函数
+	task.SubscribeStatus(func(status *gopher_fetch.TaskStatus, speedString string) {
+		fmt.Printf("当前已下载：%d / %d字节，实际并发数：%d，速度：%s\n", status.DownloadSize, status.TotalSize, status.Concurrency, speedString)
+	})
+	// 运行分片下载
+	e := task.Run()
+	if e != nil {
+		fmt.Printf("下载文件出错！%s\n", e)
+		return
+	}
+}
+```
+
+上述代码在下载时，会实时输出下载的状态与速度，且每次输出间隔不小于`1s`。
+
+首先，通过全局配置`gopher_fetch.GlobalConfig.StatusNotifyDuration`可指定在监听实时下载进度的时候每次监听的间隔，一般来说间隔不宜太短，否则会进行频繁地监听计算导致资源浪费。
+
+然后在调用`Run`执行下载任务之前，通过`SubscribeStatus`函数注册自定义的状态监听回调函数`lookup`，在下载任务执行时每当任务状态变化（例如下载量的增加、并发数变化等）时这个观察者函数`lookup`就会被调用，并将任务的状态传入`lookup`函数，每次`lookup`函数被调用的时间间隔不小于`gopher_fetch.GlobalConfig.StatusNotifyDuration`定义的值。
+
+`lookup`函数有两个参数：
+
+- `status` 为`gopher_fetch.TaskStatus`对象指针，表示此时下载任务`ParallelGetTask`的状态
+- `speedString` 此时的下载速度，为字符串形式，单位已被自动换算
+
+`gopher_fetch.TaskStatus`对象是表示当前时刻下载任务`ParallelGetTask`的状态的结构体，其定义如下：
+
+```go
+// TaskStatus 表示一个时刻的多线程下载任务的任务状态
+type TaskStatus struct {
+	// 下载文件的总大小（字节）
+	TotalSize int64
+	// 已下载大小（字节）
+	DownloadSize int64
+	// 当前实际并发数
+	Concurrency int
+}
+```
+
+可在`lookup`中读取其对应属性，显示或者计算实时下载状态。
+
+除了自己实现这个`lookup`函数之外，还提供了一个内置的默认实现`gopher_fetch.DefaultProcessLookup`，能够在终端实时输出下载进度百分比，直接将这个函数传入`SubscribeStatus`即可：
+
+```go
+// 创建一个分片下载任务
+task := gopher_fetch.NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
+// 注册监听进度回调函数
+// 使用默认实现
+task.SubscribeStatus(gopher_fetch.DefaultProcessLookup)
+e := task.Run()
+// ...
+```
+
+## 8，`ParallelGetTask`的属性
 
 `ParallelGetTask`是核心的多线程下载任务对象，它有下列公开属性：
 
@@ -203,4 +280,4 @@ func main() {
 - `ConcurrentTaskCount` 当前实际并发执行的任务数
 - `ShardList` 全部分片任务对象列表
 
-可以在开始下载任务后，使用另一个Goroutine中读取这些状态属性来获取实时的下载状态，或者打印配置，但尽量不要修改这些属性的值，否则可能出现错误。
+可在需要的时候读取上述对应属性，但尽量不要修改这些属性的值，否则可能出现错误。

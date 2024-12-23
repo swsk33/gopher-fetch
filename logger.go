@@ -25,9 +25,7 @@ func init() {
 func ConfigEnableLogger(enable bool) {
 	if enable {
 		logger.Level = sclog.INFO
-		realTimeLogger.Level = sclog.INFO
 	} else {
 		logger.Level = sclog.OFF
-		realTimeLogger.Level = sclog.OFF
 	}
 }
