@@ -1,5 +1,7 @@
 gitee.com/swsk33/concurrent-task-pool/v2 v2.1.0 h1:i+Yw7QUR9iWob1YRSj7YPVuZ/b4+IcNa3cyUHz8UAFE=
 gitee.com/swsk33/concurrent-task-pool/v2 v2.1.0/go.mod h1:TQu2hpDv3U9O5ASsd1FvdG4Ht8J+N3f549buQxyDt3Q=
+gitee.com/swsk33/concurrent-task-pool/v2 v2.1.1 h1:mOg8HdbDo0Sh0iajcXcIf5M7mOxRKzpghpNG6m6jjZ0=
+gitee.com/swsk33/concurrent-task-pool/v2 v2.1.1/go.mod h1:TQu2hpDv3U9O5ASsd1FvdG4Ht8J+N3f549buQxyDt3Q=
 gitee.com/swsk33/gopher-notify v1.2.0 h1:LcfxpGZkqY6bh1KfA9zTxaeMBLnVsoSwX2vEVNm16zQ=
 gitee.com/swsk33/gopher-notify v1.2.0/go.mod h1:pPELmT/iIwczUej+gFiB/eQlkTR9F2BsxGpkavDAGtY=
 gitee.com/swsk33/sclog v1.3.1 h1:ZIG7wCLgzwBEE29iBKIrgOWIDqyHLrqzU85O6TYxZBw=

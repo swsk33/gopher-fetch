@@ -8,7 +8,7 @@ retract (
 )
 
 require (
-	gitee.com/swsk33/concurrent-task-pool/v2 v2.1.0
+	gitee.com/swsk33/concurrent-task-pool/v2 v2.1.1
 	gitee.com/swsk33/gopher-notify v1.2.0
 	gitee.com/swsk33/sclog v1.3.1
 	github.com/fatih/color v1.18.0

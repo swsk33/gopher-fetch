@@ -238,8 +238,6 @@ func (task *ParallelGetTask) downloadShard() error {
 	}
 	// 全局错误
 	var totalError error
-	// 是否是正常完成的
-	isDone := true
 	// 创建并发任务池，下载分片数据
 	taskPool := tp.NewTaskPool[*shardTask](task.Config.Concurrent, task.Config.ShardStartDelay, 0, task.Status.ShardList,
 		// 每个分片任务下载逻辑
@@ -261,14 +259,12 @@ func (task *ParallelGetTask) downloadShard() error {
 				}
 				// 否则，中断整个任务
 				totalError = e
-				isDone = false
 				pool.Interrupt()
 			}
 		},
 		// 接收到停机信号处理逻辑
 		func(pool *tp.TaskPool[*shardTask]) {
 			totalError = errors.New("任务被中断！")
-			isDone = false
 		},
 		// 下载时每隔一段时间保存状态
 		func(pool *tp.TaskPool[*shardTask]) {
@@ -284,7 +280,7 @@ func (task *ParallelGetTask) downloadShard() error {
 	taskPool.Start()
 	// 完成下载，换行一次
 	fmt.Println()
-	if isDone {
+	if !taskPool.IsInterrupt() {
 		logger.Info("文件：%s下载完成！\n", task.Config.FilePath)
 	} else {
 		logger.Warn("文件：%s未能完成下载！\n", task.Config.FilePath)
