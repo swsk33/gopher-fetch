@@ -101,5 +101,6 @@ func computeSpeed(size int64, timeElapsed time.Duration) string {
 
 // DefaultProcessLookup 默认的进度观察者回调函数，能够在控制台输出实时进度
 func DefaultProcessLookup(status *TaskStatus, speedString string) {
-	realTimeLogger.Info("\r当前下载进度：%6.2f%%，实际并发数：%4d，当前速度：%s", float64(status.DownloadSize)/float64(status.TotalSize)*100, status.Concurrency, speedString)
+	realTimeLogger.Info("\033[2K当前下载进度：%6.2f%%，实际并发数：%4d，当前速度：%s\n", float64(status.DownloadSize)/float64(status.TotalSize)*100, status.Concurrency, speedString)
+	fmt.Print("\033[A")
 }

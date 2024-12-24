@@ -10,8 +10,8 @@ func TestParallelGetTask_Run(t *testing.T) {
 	// 加入自定义请求头
 	GlobalConfig.Headers["Origin"] = "github.com"
 	// 创建一个分片下载任务
-	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
-	task := NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
+	url := "https://github.com/skeeto/w64devkit/releases/download/v2.0.0/w64devkit-x64-2.0.0.exe"
+	task := NewDefaultParallelGetTask(url, "downloads/w64devkit-x64-2.0.0.exe", 32)
 	// 监听分片任务的下载状态
 	// 使用默认的函数
 	task.SubscribeStatus(DefaultProcessLookup)
@@ -22,7 +22,7 @@ func TestParallelGetTask_Run(t *testing.T) {
 		return
 	}
 	// 计算摘要
-	result, e := task.CheckFile(ChecksumSha256, "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982")
+	result, e := task.CheckFile(ChecksumSha256, "cea23fc56a5e61457492113a8377c8ab0c42ed82303fcc454ccd1963a46f8ce1")
 	if e != nil {
 		t.Error(e)
 		return
@@ -40,7 +40,7 @@ func TestParallelGetTask_Run(t *testing.T) {
 func TestParallelGetTask_Recover(t *testing.T) {
 	ConfigEnvironmentProxy()
 	// 从文件恢复并发任务
-	task, e := NewParallelGetTaskFromFile("downloads/draw.io.exe.process.json")
+	task, e := NewParallelGetTaskFromFile("downloads/w64devkit-x64-2.0.0.exe.process.json")
 	if e != nil {
 		t.Error(e)
 		return
@@ -54,7 +54,7 @@ func TestParallelGetTask_Recover(t *testing.T) {
 		return
 	}
 	// 计算摘要
-	result, e := task.CheckFile(ChecksumSha256, "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982")
+	result, e := task.CheckFile(ChecksumSha256, "cea23fc56a5e61457492113a8377c8ab0c42ed82303fcc454ccd1963a46f8ce1")
 	if e != nil {
 		t.Error(e)
 		return

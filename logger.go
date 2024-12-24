@@ -3,13 +3,17 @@ package gopher_fetch
 import (
 	"gitee.com/swsk33/sclog"
 	"github.com/fatih/color"
+	"sync"
 )
 
+// 全局日志输出锁
+var loggerLock = &sync.Mutex{}
+
 // 全局日志对象
-var logger = sclog.NewLogger()
+var logger = sclog.NewMutexLoggerShareLock(loggerLock)
 
 // 全局实时日志对象
-var realTimeLogger = sclog.NewLogger()
+var realTimeLogger = sclog.NewMutexLoggerShareLock(loggerLock)
 
 func init() {
 	config := sclog.NewLineConfig()

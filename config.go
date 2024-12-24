@@ -17,7 +17,7 @@ type FetchConfig struct {
 // GlobalConfig 全局下载配置对象
 var GlobalConfig = &FetchConfig{
 	Retry:                5,
-	UserAgent:            "GopherFetch/1.5.0",
+	UserAgent:            "GopherFetch/1.5.1",
 	Headers:              make(map[string]string),
 	StatusNotifyDuration: 300 * time.Millisecond,
 }
