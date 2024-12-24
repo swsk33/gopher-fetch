@@ -278,8 +278,8 @@ func (task *ParallelGetTask) downloadShard() error {
 	logger.InfoLine("开始执行分片下载...")
 	// 启动分片下载
 	taskPool.Start()
-	// 完成下载，换行一次
-	fmt.Println()
+	// 完成下载，发布结束状态
+	publishTaskStatus(task, true)
 	if !taskPool.IsInterrupt() {
 		logger.Info("文件：%s下载完成！\n", task.Config.FilePath)
 	} else {
@@ -383,12 +383,12 @@ func (task *ParallelGetTask) CheckFile(algorithm, excepted string) (bool, error)
 //
 //   - lookup 观察者回调函数，当下载状态发生变化时，例如下载进度增加、实际并发数变化等，该函数就会被调用，其参数：
 //     status 当前的下载状态对象
-//     speedString 当前下载速度的字符串表示，若 GlobalConfig.StatusNotifyDuration 设为0或者负数，则 speedString 为空字符串
-func (task *ParallelGetTask) SubscribeStatus(lookup func(status *TaskStatus, speedString string)) {
+func (task *ParallelGetTask) SubscribeStatus(lookup func(status *TaskStatus)) {
 	// 注册观察者
 	task.statusSubject.Register(&parallelGetTaskObserver{
 		task:              task,
 		subscribeFunction: lookup,
 		lastSize:          task.Status.DownloadSize,
+		lastNotifyTime:    time.Now(),
 	})
 }
