@@ -1,30 +1,14 @@
 package gopher_fetch
 
 import (
-	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool/v2"
 	"gitee.com/swsk33/gopher-notify"
-	"hash"
-	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
-)
-
-// 摘要算法名称常量
-const (
-	// ChecksumMd5 MD5摘要算法
-	ChecksumMd5 = "MD5"
-	// ChecksumSha1 SHA1摘要算法
-	ChecksumSha1 = "SHA1"
-	// ChecksumSha256 SHA256摘要算法
-	ChecksumSha256 = "SHA256"
 )
 
 // ParallelGetTaskConfig 多线程下载任务的配置性质属性
@@ -268,7 +252,11 @@ func (task *ParallelGetTask) downloadShard() error {
 		},
 		// 下载时每隔一段时间保存状态
 		func(pool *tp.TaskPool[*shardTask]) {
-			_ = task.saveProcess()
+			e := saveTaskToJson(task, task.Config.processFile)
+			if e != nil {
+				logger.ErrorLine("保存下载任务出错！")
+				logger.ErrorLine(e.Error())
+			}
 			time.Sleep(500 * time.Millisecond)
 		})
 	// 创建订阅者，接收分片任务的下载变化事件
@@ -286,21 +274,6 @@ func (task *ParallelGetTask) downloadShard() error {
 		logger.Warn("文件：%s未能完成下载！\n", task.Config.FilePath)
 	}
 	return totalError
-}
-
-// 保存当前状态至进度文件
-func (task *ParallelGetTask) saveProcess() error {
-	if task.Config.processFile == "" {
-		return nil
-	}
-	// 序列化
-	content, e := json.Marshal(task)
-	if e != nil {
-		logger.ErrorLine("序列化任务对象出现错误！")
-		return e
-	}
-	// 保存
-	return writeFile(content, task.Config.processFile)
 }
 
 // Run 开始执行多线程分片下载任务
@@ -344,39 +317,7 @@ func (task *ParallelGetTask) Run() error {
 //
 // 当下载的文件摘要值和excepted相同时，返回true
 func (task *ParallelGetTask) CheckFile(algorithm, excepted string) (bool, error) {
-	// 打开文件
-	file, e := os.Open(task.Config.FilePath)
-	if e != nil {
-		return false, e
-	}
-	defer func() {
-		_ = file.Close()
-	}()
-	// 根据算法选择哈希函数
-	var hashChecker hash.Hash
-	switch algorithm {
-	case ChecksumMd5:
-		hashChecker = md5.New()
-	case ChecksumSha1:
-		hashChecker = sha1.New()
-	case ChecksumSha256:
-		hashChecker = sha256.New()
-	default:
-		return false, fmt.Errorf("不支持的摘要算法：%s", algorithm)
-	}
-	// 计算摘要
-	_, e = io.Copy(hashChecker, file)
-	if e != nil {
-		logger.ErrorLine("计算文件摘要出错！")
-		return false, e
-	}
-	// 对比
-	fileHash := strings.ToLower(fmt.Sprintf("%x", hashChecker.Sum(nil)))
-	exceptedLower := strings.ToLower(excepted)
-	logger.InfoLine("计算摘要完成！")
-	logger.Info("期望：%s\n", exceptedLower)
-	logger.Info("实际：%s\n", fileHash)
-	return fileHash == exceptedLower, nil
+	return computeFileChecksum(task.Config.FilePath, algorithm, excepted)
 }
 
 // SubscribeStatus 订阅该下载任务的实时下载状态
