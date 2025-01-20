@@ -219,7 +219,7 @@ func (task *ParallelGetTask) downloadShard() error {
 	// 启动分片下载
 	taskPool.Start()
 	// 完成下载，发布结束状态
-	publishTaskStatus(task, true)
+	publishParallelTaskStatus(task, true)
 	if !taskPool.IsInterrupt() {
 		logger.Info("文件：%s下载完成！\n", task.Config.FilePath)
 	} else {
@@ -280,8 +280,7 @@ func (task *ParallelGetTask) CheckFile(algorithm, excepted string) (bool, error)
 //     status 当前的下载状态对象
 func (task *ParallelGetTask) SubscribeStatus(lookup func(status *TaskStatus)) {
 	// 注册观察者
-	task.statusSubject.Register(&parallelGetTaskObserver{
-		task:              task,
+	task.statusSubject.Register(&taskObserver{
 		subscribeFunction: lookup,
 		lastSize:          task.Status.DownloadSize,
 		lastNotifyTime:    time.Now(),

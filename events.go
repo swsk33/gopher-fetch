@@ -29,15 +29,28 @@ type TaskStatus struct {
 	IsShutdown bool
 }
 
-// 发布一个 ParallelGetTask 当前的状态，通知其所有的观察者
+// 发布一个 ParallelGetTask 分片下载任务的当前状态，通知其所有的观察者
 //
 //   - task 对应的下载任务
 //   - shutdown 该下载任务是否已经结束或者被中断
-func publishTaskStatus(task *ParallelGetTask, shutdown bool) {
+func publishParallelTaskStatus(task *ParallelGetTask, shutdown bool) {
 	task.statusSubject.UpdateAndNotify(&TaskStatus{
 		TotalSize:    task.Status.TotalSize,
 		DownloadSize: task.Status.DownloadSize,
 		Concurrency:  task.Status.ConcurrentTaskCount,
+		IsShutdown:   shutdown,
+	}, false)
+}
+
+// 发布一个 MonoGetTask 单线程下载任务的当前状态，通知其所有观察者
+//
+//   - task 对应的单线程下载任务
+//   - shutdown 该下载任务是否已经结束
+func publishMonoTaskStatus(task *MonoGetTask, shutdown bool) {
+	task.subject.UpdateAndNotify(&TaskStatus{
+		TotalSize:    task.Status.TotalSize,
+		DownloadSize: task.Status.DownloadSize,
+		Concurrency:  1,
 		IsShutdown:   shutdown,
 	}, false)
 }
@@ -53,7 +66,7 @@ func (subscriber *sizeChangeSubscriber) OnSubscribe(e *gopher_notify.Event[strin
 	// 改变多线程任务状态
 	subscriber.task.Status.DownloadSize += e.GetData()
 	// 发布多线程任务状态
-	publishTaskStatus(subscriber.task, false)
+	publishParallelTaskStatus(subscriber.task, false)
 }
 
 // 订阅分片任务启动的订阅者
@@ -67,7 +80,7 @@ func (subscriber *shardStartSubscriber) OnSubscribe(e *gopher_notify.Event[strin
 	// 改变多线程任务状态
 	subscriber.task.Status.ConcurrentTaskCount++
 	// 发布多线程任务状态
-	publishTaskStatus(subscriber.task, false)
+	publishParallelTaskStatus(subscriber.task, false)
 }
 
 // 订阅分片任务完成的订阅者
@@ -81,13 +94,11 @@ func (subscriber *shardDoneSubscriber) OnSubscribe(e *gopher_notify.Event[string
 	// 改变多线程任务状态
 	subscriber.task.Status.ConcurrentTaskCount--
 	// 发布多线程任务状态
-	publishTaskStatus(subscriber.task, false)
+	publishParallelTaskStatus(subscriber.task, false)
 }
 
-// 观察多线程分片任务状态变化的观察者
-type parallelGetTaskObserver struct {
-	// 观察的分片下载任务对象
-	task *ParallelGetTask
+// 观察下载任务状态变化的观察者
+type taskObserver struct {
 	// 上次下载大小
 	lastSize int64
 	// 上次通知时间
@@ -97,7 +108,7 @@ type parallelGetTaskObserver struct {
 }
 
 // OnUpdate 当一个 ParallelGetTask 的下载状态发生变化时，该方法被调用
-func (observer *parallelGetTaskObserver) OnUpdate(data *TaskStatus) {
+func (observer *taskObserver) OnUpdate(data *TaskStatus) {
 	// 计算速度
 	size := data.DownloadSize - observer.lastSize
 	duration := time.Now().Sub(observer.lastNotifyTime).Milliseconds()

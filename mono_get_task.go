@@ -4,9 +4,11 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"gitee.com/swsk33/gopher-notify"
 	"io"
 	"net/http"
 	"os"
+	"time"
 )
 
 // MonoGetTaskConfig 单线程下载任务对象的配置部分
@@ -37,6 +39,8 @@ type MonoGetTask struct {
 	Config MonoGetTaskConfig `json:"config"`
 	// 状态部分
 	Status MonoGetTaskStatus `json:"status"`
+	// 用于用户监听进度事件的观察者主题
+	subject *gopher_notify.Subject[*TaskStatus]
 }
 
 // NewMonoGetTask 构造函数，用于创建单线程下载任务对象
@@ -57,6 +61,7 @@ func NewMonoGetTask(url, filePath, processFile string) *MonoGetTask {
 			DownloadSize: 0,
 			retryCount:   0,
 		},
+		subject: gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration),
 	}
 }
 
@@ -90,6 +95,8 @@ func NewMonoGetTaskFromFile(file string) (*MonoGetTask, error) {
 	// 设定对应字段
 	task.Config.processFile = file
 	task.Config.isRecover = true
+	// 创建观察者主题
+	task.subject = gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration)
 	logger.Info("从文件%s恢复单线程下载任务！\n", file)
 	return &task, nil
 }
@@ -198,7 +205,17 @@ func (task *MonoGetTask) fetchFile() error {
 		}
 		// 记录下载进度
 		task.Status.DownloadSize += int64(readSize)
+		// 发布任务状态变化
+		publishMonoTaskStatus(task, false)
+		// 保存下载文件
+		saveProcessError := saveTaskToJson[*MonoGetTask](task, task.Config.processFile)
+		if saveProcessError != nil {
+			logger.ErrorLine("保存单线程任务进度文件出错！")
+			logger.ErrorLine(saveProcessError.Error())
+		}
 	}
+	// 发布下载完成消息
+	publishMonoTaskStatus(task, true)
 	logger.Info("文件%s下载完成！\n", task.Config.FilePath)
 	return nil
 }
@@ -239,5 +256,30 @@ func (task *MonoGetTask) Run() error {
 			logger.ErrorLine(e.Error())
 		}
 	}
+	// 释放部分资源
+	task.subject.RemoveAll()
 	return nil
+}
+
+// CheckFile 检查文件摘要值，请在调用 Run 方法并下载完成后再调用该函数
+//
+//   - algorithm 摘要算法名称，支持： gopher_fetch.ChecksumMd5 gopher_fetch.ChecksumSha1 gopher_fetch.ChecksumSha256
+//   - excepted 期望的摘要值，16进制字符串，不区分大小写
+//
+// 当下载的文件摘要值和excepted相同时，返回true
+func (task *MonoGetTask) CheckFile(algorithm, excepted string) (bool, error) {
+	return computeFileChecksum(task.Config.FilePath, algorithm, excepted)
+}
+
+// SubscribeStatus 订阅该下载任务的实时下载状态
+//
+//   - lookup 观察者回调函数，当下载状态发生变化时，例如下载进度增加、实际并发数变化等，该函数就会被调用，其参数：
+//     status 当前的下载状态对象
+func (task *MonoGetTask) SubscribeStatus(lookup func(status *TaskStatus)) {
+	// 注册观察者
+	task.subject.Register(&taskObserver{
+		subscribeFunction: lookup,
+		lastSize:          task.Status.DownloadSize,
+		lastNotifyTime:    time.Now(),
+	})
 }
