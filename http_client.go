@@ -1,6 +1,7 @@
 package gopher_fetch
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -43,6 +44,49 @@ func sendRequest(url, method string, rangeStart, rangeEnd int64) (*http.Response
 		return nil, e
 	}
 	return response, nil
+}
+
+// 获取请求的文件大小
+//
+//   - url 请求地址
+//
+// 返回值分别是：
+//   - 获取到的长度，获取失败返回-1
+//   - 请求是否支持分片获取（是否支持Range请求头）
+//   - 出现错误则返回非空错误对象
+func getContentLength(url string) (int64, bool, error) {
+	// 发送HEAD请求，获取Length
+	response, e := sendRequest(url, http.MethodHead, -1, -1)
+	if e != nil {
+		logger.ErrorLine("发送HEAD请求出错！")
+		return -1, false, e
+	}
+	// 如果Head不被允许，则切换为Get再试
+	if response.StatusCode >= 300 {
+		logger.Warn("无法使用HEAD请求，状态码：%d，将使用GET请求重试...\n", response.StatusCode)
+		response, e = sendRequest(url, http.MethodGet, -1, -1)
+		if e != nil {
+			logger.ErrorLine("发送GET请求获取大小出错！")
+			return -1, false, e
+		}
+		// 最终直接关闭响应体，不进行读取
+		defer func() {
+			_ = response.Body.Close()
+		}()
+		// 再次检查状态码，若不正确则返回错误
+		if response.StatusCode >= 300 {
+			logger.Error("发送GET请求获取大小出错！状态码：%d\n", response.StatusCode)
+			return -1, false, fmt.Errorf("状态码不正确：%d", response.StatusCode)
+		}
+	}
+	// 读取长度
+	if response.ContentLength <= 0 {
+		return -1, false, errors.New("无法获取目标文件大小！")
+	}
+	// 检查是否支持部分请求
+	supportRange := response.Header.Get("Accept-Ranges") == "bytes"
+	logger.Info("已获取下载文件大小：%d字节\n", response.ContentLength)
+	return response.ContentLength, supportRange, nil
 }
 
 // ConfigSetProxy 设定下载代理服务器

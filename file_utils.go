@@ -7,6 +7,30 @@ import (
 	"os"
 )
 
+// 创建一个指定大小的空白文件
+//
+//   - path 创建的文件路径
+//   - size 创建的文件大小（单位：字节）
+func createBlankFile(path string, size int64) error {
+	// 创建文件
+	file, e := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0755)
+	if e != nil {
+		logger.ErrorLine("创建文件出错！")
+		return e
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	// 调整文件大小
+	e = file.Truncate(size)
+	if e != nil {
+		logger.ErrorLine("调整文件大小出错！")
+		return e
+	}
+	logger.InfoLine("已为下载文件预分配磁盘空间！")
+	return nil
+}
+
 // 读取文件
 //
 //   - path 文件路径

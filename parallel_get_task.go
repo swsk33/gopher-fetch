@@ -5,7 +5,6 @@ import (
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool/v2"
 	"gitee.com/swsk33/gopher-notify"
-	"net/http"
 	"os"
 	"time"
 )
@@ -127,40 +126,15 @@ func NewParallelGetTaskFromFile(file string) (*ParallelGetTask, error) {
 
 // 获取待下载文件大小
 func (task *ParallelGetTask) getLength() error {
-	// 发送HEAD请求，获取Length
-	response, e := sendRequest(task.Config.Url, http.MethodHead, -1, -1)
+	length, supportRange, e := getContentLength(task.Config.Url)
 	if e != nil {
-		logger.ErrorLine("发送HEAD请求出错！")
 		return e
 	}
-	// 如果Head不被允许，则切换为Get再试
-	if response.StatusCode >= 300 {
-		logger.Warn("无法使用HEAD请求，状态码：%d，将使用Get请求重试...\n", response.StatusCode)
-		response, e = sendRequest(task.Config.Url, http.MethodGet, -1, -1)
-		if e != nil {
-			logger.ErrorLine("发送GET请求获取大小出错！")
-			return e
-		}
-		// 最终直接关闭响应体，不进行读取
-		defer func() {
-			_ = response.Body.Close()
-		}()
-		// 再次检查状态码，若不正确则返回错误
-		if response.StatusCode >= 300 {
-			logger.Error("发送GET请求获取大小出错！状态码：%d\n", response.StatusCode)
-			return errors.New(fmt.Sprintf("状态码不正确：%d", response.StatusCode))
-		}
+	if !supportRange {
+		return fmt.Errorf("该请求不支持部分获取，无法分片下载！")
 	}
-	// 检查是否支持部分请求
-	if response.Header.Get("Accept-Ranges") != "bytes" {
-		return errors.New("该请求不支持部分获取，无法分片下载！")
-	}
-	// 读取并设定长度
-	task.Status.TotalSize = response.ContentLength
-	if task.Status.TotalSize <= 0 {
-		return errors.New("无法获取目标文件大小！")
-	}
-	logger.Info("已获取下载文件大小：%d字节\n", task.Status.TotalSize)
+	// 获取成功则设定大小
+	task.Status.TotalSize = length
 	return nil
 }
 
@@ -193,23 +167,7 @@ func (task *ParallelGetTask) allocateTask() {
 
 // 创建一个与目标下载文件大小一样的空白的文件
 func (task *ParallelGetTask) createFile() error {
-	// 创建文件
-	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY|os.O_CREATE, 0755)
-	defer func() {
-		_ = file.Close()
-	}()
-	if e != nil {
-		logger.ErrorLine("创建文件出错！")
-		return e
-	}
-	// 调整文件大小
-	e = file.Truncate(task.Status.TotalSize)
-	if e != nil {
-		logger.ErrorLine("调整文件大小出错！")
-		return e
-	}
-	logger.InfoLine("已为下载文件预分配磁盘空间！")
-	return nil
+	return createBlankFile(task.Config.FilePath, task.Status.TotalSize)
 }
 
 // 开始下载全部分片
@@ -293,10 +251,12 @@ func (task *ParallelGetTask) Run() error {
 		return e
 	}
 	// 删除进度文件
-	e = os.Remove(task.Config.processFile)
-	if e != nil {
-		logger.Warn("删除进度文件：%s失败！请稍后手动删除！\n", task.Config.processFile)
-		logger.ErrorLine(e.Error())
+	if task.Config.processFile != "" {
+		e = os.Remove(task.Config.processFile)
+		if e != nil {
+			logger.Warn("删除进度文件：%s失败！请稍后手动删除！\n", task.Config.processFile)
+			logger.ErrorLine(e.Error())
+		}
 	}
 	// 释放部分资源
 	task.statusSubject.RemoveAll()

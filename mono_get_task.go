@@ -90,7 +90,6 @@ func NewMonoGetTaskFromFile(file string) (*MonoGetTask, error) {
 	// 设定对应字段
 	task.Config.processFile = file
 	task.Config.isRecover = true
-	task.Status.retryCount = 0
 	logger.Info("从文件%s恢复单线程下载任务！\n", file)
 	return &task, nil
 }
@@ -111,6 +110,31 @@ func (task *MonoGetTask) retry(reason string, e error) error {
 	return e
 }
 
+// 获取下载文件大小
+func (task *MonoGetTask) getLength() error {
+	length, supportRange, e := getContentLength(task.Config.Url)
+	if e != nil {
+		return e
+	}
+	// 不支持断点续传，则重设下载起始位置
+	if !supportRange {
+		task.Status.DownloadSize = 0
+		logger.Warn("下载任务：%s 不支持断点续传！\n", task.Config.Url)
+	}
+	// 检查恢复的任务总大小是否和获取的一致
+	if task.Config.isRecover && task.Status.TotalSize != length {
+		return fmt.Errorf("恢复任务文件大小和请求大小不一致！(%d != %d)，请删除进度文件和已下载文件，重新创建任务！", task.Status.TotalSize, length)
+	}
+	// 设定总大小
+	task.Status.TotalSize = length
+	return nil
+}
+
+// 创建空白文件
+func (task *MonoGetTask) createFile() error {
+	return createBlankFile(task.Config.FilePath, task.Status.TotalSize)
+}
+
 // 发送下载请求
 func (task *MonoGetTask) fetchFile() error {
 	// 打开文件
@@ -122,18 +146,18 @@ func (task *MonoGetTask) fetchFile() error {
 	defer func() {
 		_ = file.Close()
 	}()
-	// 如果下载任务是可恢复的，且已下载部分，则确定起始范围
-	var startIndex int64 = -1
-	if task.Status.TotalSize > 0 && task.Status.DownloadSize > 0 {
-		startIndex = task.Status.DownloadSize
-		_, e = file.Seek(startIndex, io.SeekStart)
-		if e != nil {
-			logger.ErrorLine("单线程下载任务设定文件指针失败！")
-			return e
-		}
+	// 设定文件起始读取位置
+	_, e = file.Seek(task.Status.DownloadSize, io.SeekStart)
+	if e != nil {
+		logger.ErrorLine("单线程下载任务设定文件指针失败！")
+		return e
 	}
 	// 发送请求
-	response, e := sendRequest(task.Config.Url, http.MethodGet, startIndex, -1)
+	var rangeStart int64 = -1
+	if task.Status.DownloadSize > 0 {
+		rangeStart = task.Status.DownloadSize
+	}
+	response, e := sendRequest(task.Config.Url, http.MethodGet, rangeStart, -1)
 	if e != nil {
 		// 视情况重试
 		return task.retry("发送下载请求失败！", e)
@@ -145,11 +169,6 @@ func (task *MonoGetTask) fetchFile() error {
 	if response.StatusCode >= 300 {
 		// 重试
 		return task.retry(fmt.Sprintf("发送下载请求失败！状态码不正确：%d", response.StatusCode), errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode)))
-	}
-	// 设定文件大小
-	task.Status.TotalSize = response.ContentLength
-	if task.Status.TotalSize <= 0 {
-		logger.WarnLine("无法获取目标文件下载大小！将不支持任务恢复！")
 	}
 	// 读取响应体
 	buffer := make([]byte, 8192)
@@ -180,10 +199,45 @@ func (task *MonoGetTask) fetchFile() error {
 		// 记录下载进度
 		task.Status.DownloadSize += int64(readSize)
 	}
+	logger.Info("文件%s下载完成！\n", task.Config.FilePath)
 	return nil
 }
 
 // Run 启动单线程下载任务
-func (task *MonoGetTask) Run() {
-
+func (task *MonoGetTask) Run() error {
+	// 获取文件大小
+	e := task.getLength()
+	if e != nil {
+		return e
+	}
+	// 如果不是恢复的任务，则创建空白文件
+	if !task.Config.isRecover {
+		e = task.createFile()
+		if e != nil {
+			return e
+		}
+	}
+	// 下载文件，失败视情况重试
+	for {
+		e = task.fetchFile()
+		if e != nil {
+			// 如果是可重试错误则重试
+			if errors.As(e, &retryErrorType) {
+				logger.ErrorLine(e.Error())
+				continue
+			}
+			// 否则返回错误
+			return e
+		}
+		break
+	}
+	// 删除进度文件
+	if task.Config.processFile != "" {
+		e = os.Remove(task.Config.processFile)
+		if e != nil {
+			logger.Warn("删除进度文件：%s失败！请稍后手动删除！\n", task.Config.processFile)
+			logger.ErrorLine(e.Error())
+		}
+	}
+	return nil
 }
