@@ -63,8 +63,26 @@ func newShardTask(url string, order int, filePath string, rangeStart int64, rang
 	}
 }
 
+// 分片重试逻辑
+//
+//   - reason 重试原因
+//   - e 实际发生的错误
+//
+// 若未达到最大重试次数，则返回可重试错误对象，否则返回实际错误对象
+func (task *shardTask) retry(reason string, e error) error {
+	// 未到最大重试次数，返回重试错误
+	if task.Status.retryCount < GlobalConfig.Retry {
+		task.Status.retryCount++
+		return createShardRetryError(task, reason)
+	}
+	// 否则，中断并返回错误
+	return e
+}
+
 // 下载对应分片，该方法在并发任务池中作为一个异步任务并发调用
 func (task *shardTask) getShard() error {
+	// 发布分片启动事件
+	task.statusPublisher.Publish(gopher_notify.NewEvent(shardStart, int64(0)), false)
 	// 打开文件
 	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY, 0755)
 	if e != nil {
@@ -86,12 +104,7 @@ func (task *shardTask) getShard() error {
 	response, e := sendRequest(task.Config.Url, http.MethodGet, startIndex, task.Config.RangeEnd)
 	// 出现错误则视情况重试
 	if e != nil {
-		// 未到最大重试次数，返回重试错误
-		if task.Status.retryCount < GlobalConfig.Retry {
-			return createRetryError(task, "发送下载请求失败！")
-		}
-		// 否则，中断并返回错误
-		return e
+		return task.retry("发送请求失败！", e)
 	}
 	defer func() {
 		_ = response.Body.Close()
@@ -100,11 +113,7 @@ func (task *shardTask) getShard() error {
 	// 出现错误则视情况重试
 	if response.StatusCode >= 300 {
 		// 未到最大重试次数，返回重试错误
-		if task.Status.retryCount < GlobalConfig.Retry {
-			return createRetryError(task, fmt.Sprintf("发送下载请求失败！状态码不正确：%d", response.StatusCode))
-		}
-		// 否则，中断并返回错误
-		return errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode))
+		return task.retry(fmt.Sprintf("发送下载请求失败！状态码不正确：%d", response.StatusCode), errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode)))
 	}
 	// 读取请求体
 	body := response.Body
@@ -121,23 +130,18 @@ func (task *shardTask) getShard() error {
 				break
 			} else {
 				// 视情况重试
-				// 未到最大重试次数，返回重试错误
-				if task.Status.retryCount < GlobalConfig.Retry {
-					return createRetryError(task, "读取响应体失败！")
-				}
-				// 否则，中断并返回错误
-				return e
+				return task.retry("读取响应体失败！", readError)
 			}
 		}
 		// 把缓冲区内容写入至文件
 		_, writeError := writer.Write(buffer[:readSize])
 		if writeError != nil {
-			logger.Error("任务%d写入文件写入器时出现错误！\n", task.Config.Order)
+			logger.Error("任务%d写入文件出现错误！\n", task.Config.Order)
 			return writeError
 		}
 		writeError = writer.Flush()
 		if writeError != nil {
-			logger.Error("任务%d在写入文件时出现错误！\n", task.Config.Order)
+			logger.Error("任务%d刷新文件缓冲区出现错误！\n", task.Config.Order)
 			return writeError
 		}
 		// 记录下载进度

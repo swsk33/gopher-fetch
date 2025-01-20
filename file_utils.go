@@ -50,6 +50,7 @@ func writeFile(content []byte, path string) error {
 
 // 将下载任务序列化为JSON文件
 //
+//   - T 任务对象类型
 //   - task 下载任务对象
 //   - path 保存文件位置，若为空字符串""则不会进行任何操作
 //
@@ -65,4 +66,28 @@ func saveTaskToJson[T any](task T, path string) error {
 		return e
 	}
 	return writeFile(content, path)
+}
+
+// 从JSON文件加载下载任务
+//
+//   - T 任务对象类型，不要传递指针
+//   - path 保存文件位置
+//
+// 出现错误返回错误对象
+func loadTaskFromJson[T any](path string) (T, error) {
+	var zero T
+	// 读取内容
+	content, e := readFile(path)
+	if e != nil {
+		logger.ErrorLine(e.Error())
+		return zero, e
+	}
+	// 反序列化
+	var task T
+	e = json.Unmarshal(content, &task)
+	if e != nil {
+		logger.ErrorLine("反序列化任务内容出错！")
+		return zero, e
+	}
+	return task, nil
 }

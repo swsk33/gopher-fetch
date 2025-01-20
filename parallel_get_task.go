@@ -1,7 +1,6 @@
 package gopher_fetch
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	tp "gitee.com/swsk33/concurrent-task-pool/v2"
@@ -32,9 +31,9 @@ type ParallelGetTaskStatus struct {
 	// 下载文件的总大小（字节）
 	TotalSize int64 `json:"totalSize"`
 	// 已下载部分的大小（字节）
-	DownloadSize int64 `json:"downloadSize"`
+	DownloadSize int64 `json:"-"`
 	// 当前实际并发任务数
-	ConcurrentTaskCount int `json:"concurrentTaskCount"`
+	ConcurrentTaskCount int `json:"-"`
 	// 存放全部分片任务的列表
 	ShardList []*shardTask `json:"shardList"`
 }
@@ -70,11 +69,12 @@ func NewParallelGetTask(url, filePath, processFile string, shardRequestDelay tim
 			isRecover:       false,
 		},
 		Status: ParallelGetTaskStatus{
-			TotalSize:    0,
-			DownloadSize: 0,
-			ShardList:    make([]*shardTask, 0),
+			TotalSize:           0,
+			DownloadSize:        0,
+			ConcurrentTaskCount: 0,
+			ShardList:           make([]*shardTask, 0),
 		},
-		shardBroker:   gopher_notify.NewBroker[string, int64](concurrent),
+		shardBroker:   gopher_notify.NewBroker[string, int64](concurrent * 3),
 		statusSubject: gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration),
 	}
 }
@@ -89,34 +89,39 @@ func NewDefaultParallelGetTask(url, filePath string, concurrent int) *ParallelGe
 	return NewParallelGetTask(url, filePath, fmt.Sprintf("%s.process.json", filePath), 0, concurrent)
 }
 
+// NewSimpleParallelGetTask 创建一个最简并发任务对象
+// 不保存进度文件
+//
+//   - url 下载地址
+//   - filePath 下载文件的保存路径
+//   - concurrent 多线程下载并发数
+func NewSimpleParallelGetTask(url, filePath string, concurrent int) *ParallelGetTask {
+	return NewParallelGetTask(url, filePath, "", 0, concurrent)
+}
+
 // NewParallelGetTaskFromFile 从进度记录文件读取并恢复一个多线程下载任务对象
 //
 // file 进度文件位置
 func NewParallelGetTaskFromFile(file string) (*ParallelGetTask, error) {
-	// 读取内容
-	content, e := readFile(file)
+	// 加载任务
+	task, e := loadTaskFromJson[ParallelGetTask](file)
 	if e != nil {
-		logger.ErrorLine(e.Error())
 		return nil, e
 	}
-	// 反序列化
-	var task ParallelGetTask
-	e = json.Unmarshal(content, &task)
-	if e != nil {
-		logger.ErrorLine("反序列化任务内容出错！")
-		return nil, e
-	}
-	// 设定记录文件位置字段
+	// 恢复对应配置
 	task.Config.processFile = file
-	// 标记为恢复任务
 	task.Config.isRecover = true
+	// 恢复对应状态
+	for _, shard := range task.Status.ShardList {
+		task.Status.DownloadSize += shard.Status.DownloadSize
+	}
 	// 创建事件总线与主题对象
-	task.shardBroker = gopher_notify.NewBroker[string, int64](task.Config.Concurrent)
+	task.shardBroker = gopher_notify.NewBroker[string, int64](task.Config.Concurrent * 3)
 	task.statusSubject = gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration)
 	for _, shard := range task.Status.ShardList {
 		shard.statusPublisher = gopher_notify.NewBasePublisher[string, int64](task.shardBroker)
 	}
-	logger.Info("从文件%s恢复下载任务！\n", file)
+	logger.Info("从文件%s恢复多线程下载任务！\n", file)
 	return &task, nil
 }
 
@@ -209,17 +214,6 @@ func (task *ParallelGetTask) createFile() error {
 
 // 开始下载全部分片
 func (task *ParallelGetTask) downloadShard() error {
-	// 更新自己的状态
-	if task.Config.isRecover {
-		task.Status.DownloadSize = 0
-		task.Status.ConcurrentTaskCount = 0
-	}
-	for _, shard := range task.Status.ShardList {
-		task.Status.DownloadSize += shard.Status.DownloadSize
-		if !shard.Status.TaskDone {
-			task.Status.ConcurrentTaskCount++
-		}
-	}
 	// 全局错误
 	var totalError error
 	// 创建并发任务池，下载分片数据
@@ -237,7 +231,6 @@ func (task *ParallelGetTask) downloadShard() error {
 				// 判断是否是可重试错误，若是则执行重试逻辑
 				if errors.As(e, &retryErrorType) {
 					logger.WarnLine(e.Error())
-					shardTask.Status.retryCount++
 					pool.Retry(shardTask)
 					return
 				}
@@ -261,6 +254,7 @@ func (task *ParallelGetTask) downloadShard() error {
 		})
 	// 创建订阅者，接收分片任务的下载变化事件
 	task.shardBroker.Subscribe(sizeAdd, &sizeChangeSubscriber{task})
+	task.shardBroker.Subscribe(shardStart, &shardStartSubscriber{task: task})
 	task.shardBroker.Subscribe(shardDone, &shardDoneSubscriber{task})
 	// 启动分片下载任务
 	logger.InfoLine("开始执行分片下载...")

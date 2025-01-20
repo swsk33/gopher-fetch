@@ -18,7 +18,7 @@ var httpClient = &http.Client{
 //
 //   - url 请求地址
 //   - method 请求方法，例如：http.MethodHead http.MethodGet 等等
-//   - rangeStart, rangeEnd 表示分片请求的范围，若不需要设定范围，则全部置为-1
+//   - rangeStart, rangeEnd 表示分片请求的范围，若不需要设定范围，则全部置为-1，若起始不为-1但终止为-1，则获取从起始开始往后的全部内容
 func sendRequest(url, method string, rangeStart, rangeEnd int64) (*http.Response, error) {
 	// 准备请求
 	request, e := http.NewRequest(method, url, nil)
@@ -30,6 +30,8 @@ func sendRequest(url, method string, rangeStart, rangeEnd int64) (*http.Response
 	request.Header.Set("User-Agent", GlobalConfig.UserAgent)
 	if rangeStart != -1 && rangeEnd != -1 {
 		request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", rangeStart, rangeEnd))
+	} else if rangeStart != -1 {
+		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", rangeStart))
 	}
 	for key, value := range GlobalConfig.Headers {
 		request.Header.Set(key, value)

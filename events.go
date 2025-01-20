@@ -9,6 +9,8 @@ import (
 const (
 	// 下载数据量增加
 	sizeAdd = "size-add"
+	// 分片任务启动
+	shardStart = "shard-start"
 	// 分片任务完成
 	shardDone = "shard-done"
 )
@@ -50,6 +52,20 @@ type sizeChangeSubscriber struct {
 func (subscriber *sizeChangeSubscriber) OnSubscribe(e *gopher_notify.Event[string, int64]) {
 	// 改变多线程任务状态
 	subscriber.task.Status.DownloadSize += e.GetData()
+	// 发布多线程任务状态
+	publishTaskStatus(subscriber.task, false)
+}
+
+// 订阅分片任务启动的订阅者
+type shardStartSubscriber struct {
+	// 对应的分片下载任务对象
+	task *ParallelGetTask
+}
+
+// OnSubscribe 当有一个分片任务启动时的自定义时间处理
+func (subscriber *shardStartSubscriber) OnSubscribe(e *gopher_notify.Event[string, int64]) {
+	// 改变多线程任务状态
+	subscriber.task.Status.ConcurrentTaskCount++
 	// 发布多线程任务状态
 	publishTaskStatus(subscriber.task, false)
 }
