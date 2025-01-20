@@ -93,19 +93,16 @@ func main() {
 
 `ParallelGetTask`表示一个多线程下载任务对象，`NewParallelGetTask`是其构造函数，该构造函数参数如下：
 
-- 参数`1`：下载的文件地址（文件直链地址）
-- 参数`2`：下载文件的保存路径
-- 参数`3`：下载进度文件的保存位置，在下载任务进行时会实时保存下载进度到进度文件，内容为JSON格式，若传入空字符串`""`表示不记录为进度文件
-- 参数`4`：开始进行下载任务时，分片请求时间间隔，若设为`0`则开始下载时所有分片同时开始请求
-- 参数`5`：多线程下载并发数
+- 参数`1`：`url`，下载的文件地址（文件直链地址）
+- 参数`2`：`filePath`，下载文件的保存路径
+- 参数`3`：`processFile`，下载进度文件的保存位置，在下载任务进行时会实时保存下载进度到进度文件，内容为JSON格式，若传入空字符串`""`表示不记录为进度文件
+- 参数`4`：`shardRequestDelay`，开始进行下载任务时，分片请求时间间隔，若设为`0`则开始下载时所有分片同时开始请求
+- 参数`5`：`concurrent`，多线程下载并发数
 
-此外，还有一个构造函数`NewDefaultParallelGetTask`可以更简单地创建多线程下载任务对象：
+此外，还有下列构造函数可以更加简单地创建一个分片下载任务对象：
 
-```go
-task := gopher_fetch.NewDefaultParallelGetTask("http://example.com/file.txt", "downloads/file.txt", 8)
-```
-
-可见`NewDefaultParallelGetTask`省略了进度文件的保存位置和分片请求间隔参数，此时会将进度文件保存在下载文件的所在目录下，且设定分片请求间隔为`0`。
+- `NewDefaultParallelGetTask(url, filePath string, concurrent int)` 创建一个并发任务对象，设定进度文件为下载文件所在目录下
+- `NewSimpleParallelGetTask(url, filePath string, concurrent int)` 创建一个并发任务对象，不记录进度文件
 
 ## 5，从进度文件恢复
 
@@ -276,28 +273,67 @@ e := task.Run()
 - `gopher_fetch.ComputeRemainTime(status *TaskStatus)` 根据当前任务状态以及速度，计算剩余下载时间，返回剩余时间，单位是毫秒，若下载速度为`0`则返回`-1`，其参数：
   - `status` 当前时刻的下载状态对象
 
-
 可通过这些实用函数完成一些下载任务相关的计算，并在监听下载进度时显示。
 
-## 8，`ParallelGetTask`的属性
+## 8，单线程下载任务
 
-`ParallelGetTask`是核心的多线程下载任务对象，它有下列公开属性：
+多线程分片下载虽然能够在网络环境较差的情况下显著提升下载速度，但是也相对较为耗费系统资源，在多线程下载任务中维护了一个简单的工作池，以及每个分片的状态等，因此创建一个多线程分片下载任务会占用较多的CPU资源和内存资源。
 
-- `Config` 为`ParallelGetTaskConfig`类型，表示下载任务的**配置内容**结构体
-- `Status` 为`ParallelGetTaskStatus`类型，表示下载任务的**状态内容**结构体
+因此，在网络条件较好的情况下，推荐使用单线程下载的方式，在该类库中还提供了更加轻量级的单线程下载任务对象`MonoGetTask`能够进行一个单线程下载任务，可使用其构造函数`NewMonoGetTask`创建一个`MonoGetTask`对象，构造函数参数如下：
 
-上述`ParallelGetTaskConfig`类型结构体有如下公开属性：
+- 参数`1`：`url`，下载地址
+- 参数`2`：`filePath`，下载文件的保存路径
+- 参数`3`：`processFile`，下载进度文件的保存位置，若传入空字符串`""`表示不记录为进度文件
 
-- `Url` 文件下载链接
-- `FilePath` 下载文件位置
-- `Concurrent` 下载并发数
-- `ShardStartDelay` 分片请求时间间隔，若设为`0`则开始下载时所有分片同时开始请求
+类似地，还有下列简化的构造函数：
 
-上述`ParallelGetTaskStatus`类型结构体有如下公开属性：
+- `NewDefaultMonoGetTask(url, filePath string)` 创建一个默认的单线程下载任务对象，设定进度保存文件为下载文件所在目录下
+- `NewSimpleMonoGetTask(url, filePath string)` 创建一个简单的单线程下载任务对象，不保存进度文件
 
-- `TotalSize` 待下载文件的总大小（字节）
-- `DownloadSize` 当前已下载部分的大小（字节）
-- `ConcurrentTaskCount` 当前实际并发执行的任务数
-- `ShardList` 全部分片任务对象列表
+和`ParallelGetTask`对象一样，`MonoGetTask`也支持记录进度文件，可使用函数`NewMonoGetTaskFromFile(file string)`从进度文件恢复下载任务，此外两者的方法也是相同的，对于`MonoGetTask`有下列公开方法：
 
-可在需要的时候读取上述对应属性，但尽量不要修改这些属性的值，否则可能出现错误。
+- `Run()` 启动单线程下载任务
+- `CheckFile(algorithm, excepted string)` 检查文件摘要值，需要在调用`Run`方法并下载完成后再调用该函数
+- `SubscribeStatus(lookup func(status *TaskStatus))` 订阅该下载任务的实时下载状态
+
+可见和`ParallelGetTask`的用法是相同的，下面给出一个单线程下载的综合示例：
+
+```go
+package main
+
+import (
+	"fmt"
+	"gitee.com/swsk33/gopher-fetch"
+)
+
+func main() {
+	// 环境变量获取代理
+	gopher_fetch.ConfigEnvironmentProxy()
+	// 创建一个单线程下载任务
+	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
+	task := gopher_fetch.NewDefaultMonoGetTask(url, "downloads/draw.io.exe")
+	// 使用默认的回调函数订阅下载状态
+	task.SubscribeStatus(gopher_fetch.DefaultProcessLookup)
+	// 运行分片下载
+	e := task.Run()
+	if e != nil {
+		fmt.Printf("下载文件出错！%s\n", e)
+		return
+	}
+	// 下载完成后，计算摘要，以SHA256比对为例
+	// 原本文件的SHA256值
+	excepted := "9a1e232896feb2218831d50c34d9b9859e0ae670efac662dc52b0ebdf7302982"
+	result, e := task.CheckFile(gopher_fetch.ChecksumSha256, excepted)
+	if e != nil {
+		fmt.Printf("计算文件摘要出错！%s\n", e)
+		return
+	}
+	if result {
+		fmt.Println("文件未损坏！")
+	} else {
+		fmt.Println("文件损坏！")
+	}
+}
+```
+
+可根据实际情况，选择使用多线程分片下载还是单线程下载。

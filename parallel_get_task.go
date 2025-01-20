@@ -79,7 +79,7 @@ func NewParallelGetTask(url, filePath, processFile string, shardRequestDelay tim
 }
 
 // NewDefaultParallelGetTask 创建一个并发任务对象
-// 设定进度保存文件为下载文件所在目录下
+// 设定进度文件保存至下载文件所在目录下
 //
 //   - url 下载地址
 //   - filePath 下载文件的保存路径

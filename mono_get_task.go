@@ -29,6 +29,8 @@ type MonoGetTaskStatus struct {
 	TotalSize int64 `json:"totalSize"`
 	// 已下载部分的大小（字节）
 	DownloadSize int64 `json:"downloadSize"`
+	// 任务是否下载完成
+	taskDone bool
 	// 任务重试次数
 	retryCount int
 }
@@ -59,6 +61,7 @@ func NewMonoGetTask(url, filePath, processFile string) *MonoGetTask {
 		Status: MonoGetTaskStatus{
 			TotalSize:    0,
 			DownloadSize: 0,
+			taskDone:     false,
 			retryCount:   0,
 		},
 		subject: gopher_notify.NewSubject[*TaskStatus](GlobalConfig.StatusNotifyDuration),
@@ -207,13 +210,9 @@ func (task *MonoGetTask) fetchFile() error {
 		task.Status.DownloadSize += int64(readSize)
 		// 发布任务状态变化
 		publishMonoTaskStatus(task, false)
-		// 保存下载文件
-		saveProcessError := saveTaskToJson[*MonoGetTask](task, task.Config.processFile)
-		if saveProcessError != nil {
-			logger.ErrorLine("保存单线程任务进度文件出错！")
-			logger.ErrorLine(saveProcessError.Error())
-		}
 	}
+	// 标记下载完成
+	task.Status.taskDone = true
 	// 发布下载完成消息
 	publishMonoTaskStatus(task, true)
 	logger.Info("文件%s下载完成！\n", task.Config.FilePath)
@@ -233,6 +232,20 @@ func (task *MonoGetTask) Run() error {
 		if e != nil {
 			return e
 		}
+	}
+	// 在新的线程中定时保存进度
+	if task.Config.processFile != "" {
+		go func() {
+			for !task.Status.taskDone {
+				// 保存下载文件
+				saveProcessError := saveTaskToJson[*MonoGetTask](task, task.Config.processFile)
+				if saveProcessError != nil {
+					logger.ErrorLine("保存单线程任务进度文件出错！")
+					logger.ErrorLine(saveProcessError.Error())
+				}
+				time.Sleep(350 * time.Millisecond)
+			}
+		}()
 	}
 	// 下载文件，失败视情况重试
 	for {
