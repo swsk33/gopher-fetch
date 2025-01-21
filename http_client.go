@@ -1,10 +1,13 @@
 package gopher_fetch
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"os"
 )
 
 // 全局http请求客户端
@@ -14,6 +17,9 @@ var httpClient = &http.Client{
 		DisableKeepAlives: true,
 	},
 }
+
+// 响应读取缓冲区大小
+const bufferSize = 64 * 1024
 
 // 发送一个HTTP请求
 //
@@ -87,6 +93,91 @@ func getContentLength(url string) (int64, bool, error) {
 	supportRange := response.Header.Get("Accept-Ranges") == "bytes"
 	logger.Info("已获取下载文件大小：%d字节\n", response.ContentLength)
 	return response.ContentLength, supportRange, nil
+}
+
+// 发送下载文件请求并保存到本地
+//
+//   - url 下载地址
+//   - filePath 保存位置（文件需已创建好）
+//   - start 下载起始范围（字节），-1代表从头开始读取文件
+//   - end 下载终止范围（字节），-1代表一直读取到文件尾
+//   - downloadSize 记录已下载字节数的变量指针，用于任务对象维护状态
+//   - fetchDone 记录文件是否完整下载完成的变量指针，用于任务对象维护状态
+//   - startHook 下载开始时该回调函数会被执行，用于状态的发布-订阅逻辑，可以为nil
+//   - sizeAddHook 每下载一部分文件，该回调函数就会被执行，参数表示本次下载的字节数，用于状态的发布-订阅逻辑，不能为nil
+//   - doneHook 下载任务完成时，该回调函数就会被执行，用于状态的发布-订阅逻辑，不能为nil
+//
+// 返回值：
+//   - 出现错误时，返回错误原因，否则返回空字符串""，该返回值用于重试消息提示
+//   - 出现错误时返回引发错误的错误对象，否则返回nil
+func downloadFile(url, filePath string, start, end int64, downloadSize *int64, fetchDone *bool, startHook func(), sizeAddHook func(addSize int64), doneHook func()) (string, error) {
+	if startHook != nil {
+		startHook()
+	}
+	// 打开文件
+	file, e := os.OpenFile(filePath, os.O_WRONLY, 0755)
+	if e != nil {
+		return fmt.Sprintf("准备下载的文件%s失败", filePath), e
+	}
+	defer func() {
+		_ = file.Close()
+	}()
+	// 设定文件起始读取位置
+	if start > 0 {
+		_, e = file.Seek(start, io.SeekStart)
+		if e != nil {
+			return "设定文件指针失败", e
+		}
+	}
+	// 发送请求
+	response, e := sendRequest(url, http.MethodGet, start, end)
+	if e != nil {
+		return "发送下载请求失败", e
+	}
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	// 判断错误码
+	if response.StatusCode >= 300 {
+		message := fmt.Sprintf("状态码错误：%d", response.StatusCode)
+		return message, errors.New(message)
+	}
+	// 读取响应体
+	buffer := make([]byte, bufferSize)
+	// 文件写入器
+	writer := bufio.NewWriter(file)
+	for {
+		// 读取一次响应体
+		readSize, readError := response.Body.Read(buffer)
+		// 处理错误，视情况重试
+		if readError != nil && readError != io.EOF {
+			return "读取响应体错误", readError
+		}
+		// 写入文件
+		if readSize > 0 {
+			_, writeError := writer.Write(buffer[:readSize])
+			if writeError != nil {
+				return "下载任务写入文件出错", writeError
+			}
+			// 刷新缓冲区
+			writeError = writer.Flush()
+			if writeError != nil {
+				return "下载任务刷新文件缓冲区出错", writeError
+			}
+			// 记录已下载大小
+			addSize := int64(readSize)
+			*downloadSize += addSize
+			sizeAddHook(addSize)
+		}
+		// 判断是否到末尾
+		if readError == io.EOF {
+			break
+		}
+	}
+	// 标记任务完成
+	*fetchDone = true
+	doneHook()
+	return "", nil
 }
 
 // ConfigSetProxy 设定下载代理服务器

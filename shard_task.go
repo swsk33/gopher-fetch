@@ -1,13 +1,7 @@
 package gopher_fetch
 
 import (
-	"bufio"
-	"errors"
-	"fmt"
 	"gitee.com/swsk33/gopher-notify"
-	"io"
-	"net/http"
-	"os"
 )
 
 // 一个分片下载任务的配置性质属性
@@ -81,77 +75,23 @@ func (task *shardTask) retry(reason string, e error) error {
 
 // 下载对应分片，该方法在并发任务池中作为一个异步任务并发调用
 func (task *shardTask) getShard() error {
-	// 发布分片启动事件
-	task.statusPublisher.Publish(gopher_notify.NewEvent(shardStart, int64(0)), false)
-	// 打开文件
-	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY, 0755)
+	// 进行下载
+	errorMessage, e := downloadFile(task.Config.Url, task.Config.FilePath, task.Config.RangeStart+task.Status.DownloadSize, task.Config.RangeEnd, &task.Status.DownloadSize, &task.Status.TaskDone,
+		func() {
+			// 发布分片启动事件
+			task.statusPublisher.Publish(gopher_notify.NewEvent(shardStart, int64(0)), false)
+		},
+		func(addSize int64) {
+			// 发布下载大小变化事件
+			task.statusPublisher.Publish(gopher_notify.NewEvent(sizeAdd, addSize), false)
+		},
+		func() {
+			// 发布分片任务完成事件
+			task.statusPublisher.Publish(gopher_notify.NewEvent(shardDone, int64(0)), false)
+		})
+	// 视情况重试
 	if e != nil {
-		logger.Error("任务%d打开文件失败！\n", task.Config.Order)
-		return e
+		return task.retry(errorMessage, e)
 	}
-	defer func() {
-		_ = file.Close()
-	}()
-	// 计算读取位置
-	startIndex := task.Config.RangeStart + task.Status.DownloadSize
-	// 设定文件指针
-	_, e = file.Seek(startIndex, io.SeekStart)
-	if e != nil {
-		logger.Error("任务%d设定文件指针失败！\n", task.Config.Order)
-		return e
-	}
-	// 发送请求
-	response, e := sendRequest(task.Config.Url, http.MethodGet, startIndex, task.Config.RangeEnd)
-	// 出现错误则视情况重试
-	if e != nil {
-		return task.retry("发送请求失败！", e)
-	}
-	defer func() {
-		_ = response.Body.Close()
-	}()
-	// 判断状态码
-	// 出现错误则视情况重试
-	if response.StatusCode >= 300 {
-		// 未到最大重试次数，返回重试错误
-		return task.retry(fmt.Sprintf("发送下载请求失败！状态码不正确：%d", response.StatusCode), errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode)))
-	}
-	// 读取请求体
-	body := response.Body
-	// 读取缓冲区
-	buffer := make([]byte, 8092)
-	// 准备写入文件
-	writer := bufio.NewWriter(file)
-	for {
-		// 读取一次内容至缓冲区
-		readSize, readError := body.Read(buffer)
-		if readError != nil {
-			// 如果读取完毕则退出循环
-			if readError == io.EOF {
-				break
-			} else {
-				// 视情况重试
-				return task.retry("读取响应体失败！", readError)
-			}
-		}
-		// 把缓冲区内容写入至文件
-		_, writeError := writer.Write(buffer[:readSize])
-		if writeError != nil {
-			logger.Error("任务%d写入文件出现错误！\n", task.Config.Order)
-			return writeError
-		}
-		writeError = writer.Flush()
-		if writeError != nil {
-			logger.Error("任务%d刷新文件缓冲区出现错误！\n", task.Config.Order)
-			return writeError
-		}
-		// 记录下载进度
-		task.Status.DownloadSize += int64(readSize)
-		// 发布下载大小变化事件
-		task.statusPublisher.Publish(gopher_notify.NewEvent(sizeAdd, int64(readSize)), false)
-	}
-	// 标记任务完成
-	task.Status.TaskDone = true
-	// 发布分片任务完成事件
-	task.statusPublisher.Publish(gopher_notify.NewEvent(shardDone, int64(0)), false)
 	return nil
 }

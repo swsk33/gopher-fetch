@@ -208,7 +208,7 @@ func (task *ParallelGetTask) downloadShard() error {
 				logger.ErrorLine("保存下载任务出错！")
 				logger.ErrorLine(e.Error())
 			}
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(350 * time.Millisecond)
 		})
 	// 创建订阅者，接收分片任务的下载变化事件
 	task.shardBroker.Subscribe(sizeAdd, &sizeChangeSubscriber{task})

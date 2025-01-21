@@ -1,12 +1,9 @@
 package gopher_fetch
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"gitee.com/swsk33/gopher-notify"
-	"io"
-	"net/http"
 	"os"
 	"time"
 )
@@ -147,74 +144,19 @@ func (task *MonoGetTask) createFile() error {
 
 // 发送下载请求
 func (task *MonoGetTask) fetchFile() error {
-	// 打开文件
-	file, e := os.OpenFile(task.Config.FilePath, os.O_WRONLY, 0755)
+	// 下载文件
+	errorMessage, e := downloadFile(task.Config.Url, task.Config.FilePath, task.Status.DownloadSize, -1, &task.Status.DownloadSize, &task.Status.taskDone,
+		nil,
+		func(addSize int64) {
+			publishMonoTaskStatus(task, false)
+		},
+		func() {
+			publishMonoTaskStatus(task, true)
+		})
+	// 出现错误视情况返回重试错误
 	if e != nil {
-		logger.Error("单线程任务打开文件%s失败！\n", task.Config.FilePath)
-		return e
+		return task.retry(errorMessage, e)
 	}
-	defer func() {
-		_ = file.Close()
-	}()
-	// 设定文件起始读取位置
-	_, e = file.Seek(task.Status.DownloadSize, io.SeekStart)
-	if e != nil {
-		logger.ErrorLine("单线程下载任务设定文件指针失败！")
-		return e
-	}
-	// 发送请求
-	var rangeStart int64 = -1
-	if task.Status.DownloadSize > 0 {
-		rangeStart = task.Status.DownloadSize
-	}
-	response, e := sendRequest(task.Config.Url, http.MethodGet, rangeStart, -1)
-	if e != nil {
-		// 视情况重试
-		return task.retry("发送下载请求失败！", e)
-	}
-	defer func() {
-		_ = response.Body.Close()
-	}()
-	// 判断错误码
-	if response.StatusCode >= 300 {
-		// 重试
-		return task.retry(fmt.Sprintf("发送下载请求失败！状态码不正确：%d", response.StatusCode), errors.New(fmt.Sprintf("状态码错误：%d", response.StatusCode)))
-	}
-	// 读取响应体
-	buffer := make([]byte, 8192)
-	writer := bufio.NewWriter(file)
-	for {
-		// 读取一次响应体
-		readSize, readError := response.Body.Read(buffer)
-		if readError != nil {
-			// 读取完成则退出
-			if readError == io.EOF {
-				break
-			}
-			// 否则重试
-			return task.retry("读取响应体错误！", readError)
-		}
-		// 写入文件
-		_, writeError := writer.Write(buffer[:readSize])
-		if writeError != nil {
-			logger.ErrorLine("单线程下载任务写入文件出错！")
-			return writeError
-		}
-		// 刷新缓冲区
-		writeError = writer.Flush()
-		if writeError != nil {
-			logger.ErrorLine("单线程下载任务刷新文件缓冲区出错！")
-			return writeError
-		}
-		// 记录下载进度
-		task.Status.DownloadSize += int64(readSize)
-		// 发布任务状态变化
-		publishMonoTaskStatus(task, false)
-	}
-	// 标记下载完成
-	task.Status.taskDone = true
-	// 发布下载完成消息
-	publishMonoTaskStatus(task, true)
 	logger.Info("文件%s下载完成！\n", task.Config.FilePath)
 	return nil
 }
