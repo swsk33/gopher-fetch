@@ -35,9 +35,9 @@ type TaskStatus struct {
 //   - shutdown 该下载任务是否已经结束或者被中断
 func publishParallelTaskStatus(task *ParallelGetTask, shutdown bool) {
 	task.statusSubject.UpdateAndNotify(&TaskStatus{
-		TotalSize:    task.Status.TotalSize,
-		DownloadSize: task.Status.DownloadSize,
-		Concurrency:  task.Status.ConcurrentTaskCount,
+		TotalSize:    task.TotalSize,
+		DownloadSize: task.DownloadSize,
+		Concurrency:  task.concurrentTaskCount,
 		IsShutdown:   shutdown,
 	}, false)
 }
@@ -47,9 +47,9 @@ func publishParallelTaskStatus(task *ParallelGetTask, shutdown bool) {
 //   - task 对应的单线程下载任务
 //   - shutdown 该下载任务是否已经结束
 func publishMonoTaskStatus(task *MonoGetTask, shutdown bool) {
-	task.subject.UpdateAndNotify(&TaskStatus{
-		TotalSize:    task.Status.TotalSize,
-		DownloadSize: task.Status.DownloadSize,
+	task.statusSubject.UpdateAndNotify(&TaskStatus{
+		TotalSize:    task.TotalSize,
+		DownloadSize: task.DownloadSize,
 		Concurrency:  1,
 		IsShutdown:   shutdown,
 	}, false)
@@ -64,7 +64,7 @@ type sizeChangeSubscriber struct {
 // OnSubscribe 下载数据量新增时的自定义事件处理
 func (subscriber *sizeChangeSubscriber) OnSubscribe(e *gopher_notify.Event[string, int64]) {
 	// 改变多线程任务状态
-	subscriber.task.Status.DownloadSize += e.GetData()
+	subscriber.task.DownloadSize += e.GetData()
 	// 发布多线程任务状态
 	publishParallelTaskStatus(subscriber.task, false)
 }
@@ -78,7 +78,7 @@ type shardStartSubscriber struct {
 // OnSubscribe 当有一个分片任务启动时的自定义时间处理
 func (subscriber *shardStartSubscriber) OnSubscribe(e *gopher_notify.Event[string, int64]) {
 	// 改变多线程任务状态
-	subscriber.task.Status.ConcurrentTaskCount++
+	subscriber.task.concurrentTaskCount++
 	// 发布多线程任务状态
 	publishParallelTaskStatus(subscriber.task, false)
 }
@@ -92,7 +92,7 @@ type shardDoneSubscriber struct {
 // OnSubscribe 当有一个分片任务完成时的自定义事件处理
 func (subscriber *shardDoneSubscriber) OnSubscribe(e *gopher_notify.Event[string, int64]) {
 	// 改变多线程任务状态
-	subscriber.task.Status.ConcurrentTaskCount--
+	subscriber.task.concurrentTaskCount--
 	// 发布多线程任务状态
 	publishParallelTaskStatus(subscriber.task, false)
 }

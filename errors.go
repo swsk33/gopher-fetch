@@ -44,7 +44,7 @@ func createShardRetryError(task *shardTask, message string) error {
 func createMonoRetryError(task *MonoGetTask, message string) error {
 	return &retryError{
 		order:      0,
-		retryCount: task.Status.retryCount,
+		retryCount: task.retryCount,
 		reason:     message,
 	}
 }
