@@ -3,10 +3,11 @@ package gopher_fetch
 import (
 	"errors"
 	"fmt"
-	tp "gitee.com/swsk33/concurrent-task-pool/v2"
-	"gitee.com/swsk33/gopher-notify"
 	"os"
 	"time"
+
+	tp "gitee.com/swsk33/concurrent-task-pool/v2"
+	"gitee.com/swsk33/gopher-notify"
 )
 
 // ParallelGetTask 多线程下载任务类

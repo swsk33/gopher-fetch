@@ -3,9 +3,10 @@ package gopher_fetch
 import (
 	"errors"
 	"fmt"
-	"gitee.com/swsk33/gopher-notify"
 	"os"
 	"time"
+
+	"gitee.com/swsk33/gopher-notify"
 )
 
 // MonoGetTask 单线程下载任务对象

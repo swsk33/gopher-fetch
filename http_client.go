@@ -2,20 +2,91 @@ package gopher_fetch
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // 全局http请求客户端
 var httpClient = &http.Client{
+	// 默认配置
 	Timeout: 0,
 	Transport: &http.Transport{
 		DisableKeepAlives: true,
+		Proxy:             http.ProxyFromEnvironment,
 	},
+	// 重定向行为
+	//  - request 即将发出的下一次请求，也就是重定向后的请求
+	//  - via 已经发过的请求列表，按时间从旧到新排列
+	//
+	// 返回值：
+	//  - 返回 nil：允许继续重定向
+	//  - 返回非 nil 错误：停止重定向，并返回错误
+	//  - 返回 http.ErrUseLastResponse：停止重定向，但不作为错误处理，直接返回最近一次响应，默认策略是在连续 10 次重定向后停止
+	CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if len(via) > 0 {
+			logger.Debug("发生重定向：%s -> %s\n",
+				via[len(via)-1].URL.String(),
+				request.URL.String(),
+			)
+		}
+		if len(via) >= GlobalConfig.HttpClient.MaxRedirects {
+			logger.Warn("请求：%s 已到达最大重定向次数\n", request.URL.String())
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
+}
+
+// 根据当前全局配置值，更新当前的全局http客户端对象
+func updateHttpClientConfig() {
+	// 创建一个基本 Transport 对象
+	transport := http.Transport{
+		// 关闭复用，确保一个线程就建立一个 TCP 连接
+		DisableKeepAlives: true,
+	}
+	// 处理代理服务器
+	switch GlobalConfig.HttpClient.Proxy {
+	case ProxyEnv:
+		transport.Proxy = http.ProxyFromEnvironment
+		logger.InfoLine("将从环境变量获取代理配置")
+	case ProxyNone:
+		transport.Proxy = nil
+		logger.InfoLine("将不使用代理进行下载")
+	default:
+		proxyUrl := GlobalConfig.HttpClient.Proxy
+		proxy, e := url.Parse(proxyUrl)
+		if e != nil {
+			logger.Error("不支持的代理地址格式：%s，将不使用代理\n", proxyUrl)
+			transport.Proxy = nil
+		} else {
+			transport.Proxy = http.ProxyURL(proxy)
+			logger.Info("将使用代理服务器：%s 进行下载\n", proxyUrl)
+		}
+	}
+	// 处理 HTTP 协议
+	switch GlobalConfig.HttpClient.HttpVersion {
+	case HttpAuto:
+		logger.InfoLine("HTTP协议版本将自动协商")
+	case Http11:
+		logger.InfoLine("将强制使用 HTTP/1.1 版本协议发起请求")
+		transport.ForceAttemptHTTP2 = false
+		transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+	case Http20:
+		logger.InfoLine("将强制使用 HTTP/2 版本协议发起请求")
+		transport.ForceAttemptHTTP2 = true
+	default:
+		logger.Error("不支持的HTTP协议版本配置：%s，回退至自动协商\n", GlobalConfig.HttpClient.HttpVersion)
+	}
+	// 配置到 http 客户端对象
+	httpClient.Transport = &transport
+	logger.InfoLine("已更新全局http客户端配置")
 }
 
 // 响应读取缓冲区大小
@@ -34,13 +105,13 @@ func sendRequest(url, method string, rangeStart, rangeEnd int64) (*http.Response
 		return nil, e
 	}
 	// 加入请求头
-	request.Header.Set("User-Agent", GlobalConfig.UserAgent)
+	request.Header.Set("User-Agent", GlobalConfig.HttpClient.UserAgent)
 	if rangeStart != -1 && rangeEnd != -1 {
 		request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", rangeStart, rangeEnd))
 	} else if rangeStart != -1 {
 		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", rangeStart))
 	}
-	for key, value := range GlobalConfig.Headers {
+	for key, value := range GlobalConfig.HttpClient.Headers {
 		request.Header.Set(key, value)
 	}
 	// 发送请求
@@ -49,7 +120,85 @@ func sendRequest(url, method string, rangeStart, rangeEnd int64) (*http.Response
 		logger.ErrorLine("发送HTTP请求失败！")
 		return nil, e
 	}
+	logger.Debug("当前请求协议：%s，UserAgent：%s，最大重定向次数：%d\n", response.Proto, request.UserAgent(), GlobalConfig.HttpClient.MaxRedirects)
 	return response, nil
+}
+
+// 发送 HEAD 请求探测内容大小
+//
+//   - url 请求地址
+//
+// 返回值分别是：
+//   - 获取到的长度，获取失败返回-1
+//   - 请求是否支持分片获取（是否支持Range请求头）
+//   - 出现错误或请求失败（响应状态为4xx或5xx）则返回非空错误对象
+func probeByHead(url string) (int64, bool, error) {
+	// 发送HEAD请求，获取Length
+	response, e := sendRequest(url, http.MethodHead, -1, -1)
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	// 错误判断
+	if e != nil {
+		logger.ErrorLine("发送HEAD请求失败！")
+		return -1, false, e
+	}
+	// 状态码判断
+	if response.StatusCode >= 400 {
+		logger.Error("HEAD请求状态码不正确：%d\n", response.StatusCode)
+		return -1, false, fmt.Errorf("HEAD请求状态码错误：%d", response.StatusCode)
+	}
+	// 解析长度
+	contentLength := response.ContentLength
+	if contentLength <= 0 {
+		return -1, false, errors.New("无法获取目标文件大小")
+	}
+	// 检查是否支持部分请求
+	supportRange := response.Header.Get("Accept-Ranges") == "bytes"
+	logger.Info("已获取下载文件大小：%d 字节\n", contentLength)
+	// 返回
+	return contentLength, supportRange, nil
+}
+
+// 发送 GET 请求探测内容大小
+//
+//   - url 请求地址
+//
+// 返回值分别是：
+//   - 获取到的长度，获取失败返回-1
+//   - 请求是否支持分片获取（是否支持Range请求头）
+//   - 出现错误或请求失败（响应状态为4xx或5xx）则返回非空错误对象
+func probeByGet(url string) (int64, bool, error) {
+	// 发送GET请求，获取Length
+	response, e := sendRequest(url, http.MethodGet, 0, 0)
+	defer func() {
+		_ = response.Body.Close()
+	}()
+	// 错误判断
+	if e != nil {
+		logger.ErrorLine("发送GET请求失败！")
+		return -1, false, e
+	}
+	// 状态码判断
+	if response.StatusCode >= 400 {
+		logger.Error("GET请求状态码不正确：%d\n", response.StatusCode)
+		return -1, false, fmt.Errorf("GET请求状态码错误：%d", response.StatusCode)
+	}
+	// 解析长度
+	contentRange := response.Header.Get("Content-Range")
+	if contentRange == "" || !strings.Contains(contentRange, "/") {
+		return -1, false, fmt.Errorf("Content-Range为空或有误：%s", contentRange)
+	}
+	// 截取总大小
+	totalString := strings.TrimSpace(contentRange[strings.LastIndex(contentRange, "/")+1:])
+	if totalString == "*" {
+		return -1, false, errors.New("无法获取请求内容长度")
+	}
+	totalSize, e := strconv.ParseInt(totalString, 10, 64)
+	if e != nil {
+		return -1, false, fmt.Errorf("解析文件大小出错：%w", e)
+	}
+	return totalSize, true, nil
 }
 
 // 获取请求的文件大小
@@ -61,38 +210,18 @@ func sendRequest(url, method string, rangeStart, rangeEnd int64) (*http.Response
 //   - 请求是否支持分片获取（是否支持Range请求头）
 //   - 出现错误则返回非空错误对象
 func getContentLength(url string) (int64, bool, error) {
-	// 发送HEAD请求，获取Length
-	response, e := sendRequest(url, http.MethodHead, -1, -1)
+	// 先发送HEAD请求
+	length, support, e := probeByHead(url)
+	// HEAD失败回退使用GET
 	if e != nil {
-		logger.ErrorLine("发送HEAD请求出错！")
-		return -1, false, e
-	}
-	// 如果Head不被允许，则切换为Get再试
-	if response.StatusCode >= 300 {
-		logger.Warn("无法使用HEAD请求，状态码：%d，将使用GET请求重试...\n", response.StatusCode)
-		response, e = sendRequest(url, http.MethodGet, -1, -1)
+		logger.WarnLine("使用HEAD获取响应体大小失败，回退使用GET请求")
+		length, support, e = probeByGet(url)
 		if e != nil {
-			logger.ErrorLine("发送GET请求获取大小出错！")
+			logger.Error("使用GET获取响应体大小也失败：%s\n", e)
 			return -1, false, e
 		}
-		// 最终直接关闭响应体，不进行读取
-		defer func() {
-			_ = response.Body.Close()
-		}()
-		// 再次检查状态码，若不正确则返回错误
-		if response.StatusCode >= 300 {
-			logger.Error("发送GET请求获取大小出错！状态码：%d\n", response.StatusCode)
-			return -1, false, fmt.Errorf("状态码不正确：%d", response.StatusCode)
-		}
 	}
-	// 读取长度
-	if response.ContentLength <= 0 {
-		return -1, false, errors.New("无法获取目标文件大小！")
-	}
-	// 检查是否支持部分请求
-	supportRange := response.Header.Get("Accept-Ranges") == "bytes"
-	logger.Info("已获取下载文件大小：%d字节\n", response.ContentLength)
-	return response.ContentLength, supportRange, nil
+	return length, support, nil
 }
 
 // 发送下载文件请求并保存到本地
@@ -178,29 +307,4 @@ func downloadFile(url, filePath string, start, end int64, downloadSize *int64, f
 	*fetchDone = true
 	doneHook()
 	return "", nil
-}
-
-// ConfigSetProxy 设定下载代理服务器
-//
-// proxyUrl 代理服务器地址，例如：http://127.0.0.1:2345
-func ConfigSetProxy(proxyUrl string) {
-	proxy, e := url.Parse(proxyUrl)
-	if e != nil {
-		logger.Error("不支持的代理地址格式：%s\n", proxyUrl)
-		return
-	}
-	httpClient.Transport.(*http.Transport).Proxy = http.ProxyURL(proxy)
-	logger.Warn("将使用代理服务器：%s 进行下载\n", proxyUrl)
-}
-
-// ConfigEnvironmentProxy 配置从环境变量自动获取代理服务器配置
-func ConfigEnvironmentProxy() {
-	httpClient.Transport.(*http.Transport).Proxy = http.ProxyFromEnvironment
-	logger.WarnLine("将从环境变量获取代理配置")
-}
-
-// ConfigDisableProxy 关闭代理配置
-func ConfigDisableProxy() {
-	httpClient.Transport.(*http.Transport).Proxy = nil
-	logger.WarnLine("将不使用代理进行下载")
 }

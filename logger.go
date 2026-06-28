@@ -1,9 +1,10 @@
 package gopher_fetch
 
 import (
+	"sync"
+
 	"gitee.com/swsk33/sclog"
 	"github.com/fatih/color"
-	"sync"
 )
 
 // 全局日志输出锁
@@ -23,13 +24,12 @@ func init() {
 	realTimeLogger.ConfigAll(config)
 }
 
-// ConfigEnableLogger 配置是否启用控制台日志输出
-//
-// enable 若为true则打开控制台日志输出，否则关闭日志
-func ConfigEnableLogger(enable bool) {
-	if enable {
-		logger.Level = sclog.INFO
+// 根据全局配置，更新日志对象
+func updateLoggerConfig() {
+	if GlobalConfig.Log.Enabled {
+		logger.Level = GlobalConfig.Log.Level
 	} else {
 		logger.Level = sclog.OFF
 	}
+	logger.InfoLine("已更新全局日志配置")
 }

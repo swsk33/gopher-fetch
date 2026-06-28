@@ -1,8 +1,9 @@
 package gopher_fetch
 
 import (
-	"gitee.com/swsk33/gopher-notify"
 	"time"
+
+	"gitee.com/swsk33/gopher-notify"
 )
 
 // 事件主题常量
