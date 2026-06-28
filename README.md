@@ -4,7 +4,7 @@
 一个Go实现的多线程下载库，封装了多线程下载文件的逻辑，能够通过编程的方式实现基本的多线程下载操作，核心功能：
 
 - 指定线程数的并发下载
-- 支持配置例如代理、`UserAgent`等
+- 支持配置例如代理、`UserAgent`、日志等
 - 支持进度实时持久化和恢复
 - 文件校验
 - 实时下载进度的监听
@@ -21,51 +21,160 @@ go get gitee.com/swsk33/gopher-fetch
 
 在进行多线程下载之前，我们可以进行一些配置，包括日志、代理等。
 
+整个配置结构体定义如下：
+
+```go
+// FetchConfig 全局下载配置
+type FetchConfig struct {
+	// 每个分片的最大重试次数
+	Retry int
+	// 监听分片任务下载状态时，每次监听的间隔时间
+	StatusNotifyDuration time.Duration
+	// HTTP客户端配置
+	HttpClient HttpClientConfig
+	// 日志配置
+	Log LogConfig
+}
+
+// HttpClientConfig HTTP客户端相关配置
+type HttpClientConfig struct {
+	// HTTP请求最大重定向次数
+	MaxRedirects int
+	// 使用HTTP的协议版本
+	// 例如： gopher_fetch.HttpAuto, gopher_fetch.Http11 和 gopher_fetch.Http20
+	HttpVersion string
+	// 请求UserAgent
+	UserAgent string
+	// 发送下载请求时，自定义的附加请求头
+	Headers map[string]string
+	// 代理服务器配置
+	// 例如： gopher_fetch.ProxyNone, gopher_fetch.ProxyEnv, 或者一个具体的代理服务器地址：http://127.0.0.1:1234
+	Proxy string
+}
+
+// LogConfig 日志相关配置
+type LogConfig struct {
+	// 是否启用日志输出
+	Enabled bool
+	// 最低显示的日志级别
+	// 例如： sclog.DEBUG, sclog.INFO, sclog.WARN, sclog.ERROR, 级别依次从低到高
+	Level int
+}
+```
+
+通过修改全局配置对象`gopher_fetch.GlobalConfig`的属性实现自定义配置，同时修改其属性后需要调用`gopher_fetch.ApplyGlobalConfig`使得配置生效。
+
+默认的配置值声明如下：
+
+```go
+var GlobalConfig = &FetchConfig{
+	Retry:                5,
+	StatusNotifyDuration: 300 * time.Millisecond,
+	HttpClient: HttpClientConfig{
+		MaxRedirects: 20,
+		HttpVersion:  HttpAuto,
+		UserAgent:    "GopherFetch/1.9.0",
+		Headers:      make(map[string]string),
+		Proxy:        ProxyEnv,
+	},
+	Log: LogConfig{
+		Enabled: true,
+		Level:   sclog.INFO,
+	},
+}
+```
+
+通常来说，如果部分配置属性希望**维持默认**，那么就**不需要显式对这些属性赋值**，仅修改你想要自定义的属性即可。
+
+下面，将讲解几个关键配置场景。
+
 ### (1) 日志配置
 
-默认情况下，进行多线程下载时**会在控制台输出日志信息**，包括下载的文件信息、实时的下载进度等，可通过`ConfigEnableLogger`函数控制打开或者关闭日志控制台输出：
+默认情况下，进行多线程下载时**会在控制台输出日志信息**，包括下载的文件信息、实时的下载进度等，可通过修改全局配置`gopher_fetch.GlobalConfig`的`Log`属性实现日志配置。
+
+关闭控制台日志输出：
 
 ```go
 // 关闭控制台日志输出
-gopher_fetch.ConfigEnableLogger(false)
+gopher_fetch.GlobalConfig.Log.Enabled = false
+// 应用配置
+gopher_fetch.ApplyGlobalConfig()
 ```
 
-传入`true`打开日志，反之关闭日志。
+开启控制台日志输出并设定级别：
+
+```go
+// 开启控制台日志输出
+gopher_fetch.GlobalConfig.Log.Enabled = true
+// 设定级别为DEBUG
+gopher_fetch.GlobalConfig.Log.Level = sclog.DEBUG
+// 应用配置
+gopher_fetch.ApplyGlobalConfig()
+```
+
+若要开启日志，建议保持默认的`INFO`级别即可，`DEBUG`级别会输出更详细的信息。
+
+> `gopher_fetch.ApplyGlobalConfig()`在修改完所有属性后，最后**调用一次**即可。
 
 ### (2) 代理服务器
 
-默认情况下，将会通过**直接连接**的方式进行下载，可通过下列函数配置代理服务器：
+默认情况下，将会**从环境变量中读取代理服务器**并进行下载，修改全局配置`gopher_fetch.GlobalConfig`的`HttpClient.Proxy`属性实现日志配置。
+
+从**环境变量**获取代理服务器：
 
 ```go
-// 自动从环境变量读取代理配置
-// 当环境变量存在http_proxy和https_proxy时，则会读取这两个环境变量的代理服务器值，环境变量名可大写
-gopher_fetch.ConfigEnvironmentProxy()
-
-// 手动配置代理服务器，格式必须正确
-gopher_fetch.ConfigSetProxy("http://127.0.0.1:1234")
-
-// 关闭代理
-gopher_fetch.ConfigDisableProxy()
+// 从环境变量获取代理服务器配置
+gopher_fetch.GlobalConfig.HttpClient.Proxy = gopher_fetch.ProxyEnv
+// 应用配置
+gopher_fetch.ApplyGlobalConfig()
 ```
 
-### (3) 下载配置
+使用**自定义**的代理服务器：
 
-可根据自己的需要，通过修改全局配置结构体对象`GlobalConfig`以修改一些下载相关配置：
+```go
+// 自定义代理服务器
+gopher_fetch.GlobalConfig.HttpClient.Proxy = "http://127.0.0.1:1234"
+// 应用配置
+gopher_fetch.ApplyGlobalConfig()
+```
+
+`gopher_fetch.GlobalConfig.HttpClient.Proxy`的配置值可以是：
+
+- `gopher_fetch.ProxyEnv` 从标准环境变量`http_proxy`和`https_proxy`读取代理服务器
+- `gopher_fetch.ProxyNone` 不使用代理服务器，直接连接
+- 具体的一个代理服务器地址，若地址格式错误解析失败，则会回退到不使用代理服务器
+
+### (3) HTTP协议版本
+
+支持配置发起下载请求时，所使用的HTTP协议版本，默认情况下使用**自动协商**策略，若要强制使用HTTP/2协议版本，配置如下：
+
+```go
+// 强制使用HTTP/2协议发起请求
+gopher_fetch.GlobalConfig.HttpClient.HttpVersion = gopher_fetch.Http20
+// 应用配置
+gopher_fetch.ApplyGlobalConfig()
+```
+
+`gopher_fetch.GlobalConfig.HttpClient.HttpVersion`的配置值可以是：
+
+- `gopher_fetch.HttpAuto` 自动协商HTTP协议版本，Go默认策略是尽可能使用HTTP/2版本
+- `gopher_fetch.Http11` 强制使用HTTP/1.1版本
+- `gopher_fetch.Http20` 强制使用HTTP/2版本
+
+### (4) 请求头相关配置
+
+可根据自己的需要，修改发起下载请求时的请求头相关配置：
 
 ```go
 // 使用自定义UserAgent请求头为Chrome的
-gopher_fetch.GlobalConfig.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-
-// 设定每个分片的最大重试次数为10（默认：5）
-gopher_fetch.GlobalConfig.Retry = 10
-
+gopher_fetch.GlobalConfig.HttpClient.UserAgent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 // 增加一些其它的自定义请求头
 // GlobalConfig.Headers实际上是map[string]string类型
-gopher_fetch.GlobalConfig.Headers["Origin"] = "example.com"
-gopher_fetch.GlobalConfig.Headers["Authorization"] = "Bearer eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSld..."
-
-// 设定实时下载状态最短监听间隔为1s（默认：300ms）
-gopher_fetch.GlobalConfig.StatusNotifyDuration = 1 * time.Second
+gopher_fetch.GlobalConfig.HttpClient.Headers["Origin"] = "example.com"
+gopher_fetch.GlobalConfig.HttpClient.Headers["Authorization"] = "Bearer eyJhbGciOiJSUzI1NiIsInR5cCIgOiAiSld..."
+// ...
+// 应用配置
+gopher_fetch.ApplyGlobalConfig()
 ```
 
 ## 4，执行多线程下载
@@ -146,8 +255,6 @@ import (
 )
 
 func main() {
-	// 环境变量获取代理
-	gopher_fetch.ConfigEnvironmentProxy()
 	// 创建一个分片下载任务
 	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
 	task := gopher_fetch.NewDefaultParallelGetTask(url, "downloads/draw.io.exe", 32)
@@ -199,8 +306,6 @@ import (
 )
 
 func main() {
-	// 环境变量获取代理
-	gopher_fetch.ConfigEnvironmentProxy()
 	// 设定实时下载状态的最短监听间隔
 	gopher_fetch.GlobalConfig.StatusNotifyDuration = 500 * time.Millisecond
 	// 创建一个分片下载任务
@@ -307,8 +412,6 @@ import (
 )
 
 func main() {
-	// 环境变量获取代理
-	gopher_fetch.ConfigEnvironmentProxy()
 	// 创建一个单线程下载任务
 	url := "https://github.com/jgraph/drawio-desktop/releases/download/v25.0.2/draw.io-25.0.2-windows-installer.exe"
 	task := gopher_fetch.NewDefaultMonoGetTask(url, "downloads/draw.io.exe")

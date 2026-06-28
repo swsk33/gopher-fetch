@@ -41,14 +41,14 @@ type HttpClientConfig struct {
 	// HTTP请求最大重定向次数
 	MaxRedirects int
 	// 使用HTTP的协议版本
-	// 例如： HttpAuto, Http11 和 Http20
+	// 例如： gopher_fetch.HttpAuto, gopher_fetch.Http11 和 gopher_fetch.Http20
 	HttpVersion string
-	// 请求UA
+	// 请求UserAgent
 	UserAgent string
 	// 发送下载请求时，自定义的附加请求头
 	Headers map[string]string
 	// 代理服务器配置
-	// 例如： ProxyNone, ProxyEnv, 或者一个具体的代理服务器地址：http://127.0.0.1:1234
+	// 例如： gopher_fetch.ProxyNone, gopher_fetch.ProxyEnv, 或者一个具体的代理服务器地址：http://127.0.0.1:1234
 	Proxy string
 }
 
