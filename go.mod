@@ -1,6 +1,6 @@
 module gitee.com/swsk33/gopher-fetch
 
-go 1.18
+go 1.25.0
 
 retract (
 	v1.1.1
